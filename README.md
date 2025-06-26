@@ -1,1 +1,1 @@
-# kite-algo-trader-
+# kite-algo-trader

@@ -27,29 +27,41 @@ public class Config {
     public static final String STRATEGY_INSTRUMENTS = "strategy.instruments"; // Comma-separated list of instrument tokens/symbols
 
     public Config() {
-        this("src/main/resources/" + CONFIG_FILE_NAME); // Default path, adjust if needed
-                                                        // Or load from classpath: getClass().getClassLoader().getResourceAsStream(CONFIG_FILE_NAME)
+        this(CONFIG_FILE_NAME); // Load from classpath by default
     }
 
-    public Config(String propertiesFilePath) {
+    public Config(String resourceName) {
         properties = new Properties();
-        try (InputStream input = new FileInputStream(propertiesFilePath)) {
+        // Try loading from classpath first
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resourceName)) {
             if (input == null) {
-                System.err.println("Config: Unable to find " + propertiesFilePath + ". Using defaults or environment variables where possible.");
-                // Optionally, create a default properties file here if it doesn't exist, or rely on env vars / manual input.
-                loadDefaultsOrFromEnv();
-                return;
+                System.err.println("Config: Unable to find '" + resourceName + "' in classpath. Trying filesystem path 'src/main/resources/" + resourceName + "'.");
+                // Fallback to filesystem path relative to project root (useful for non-Maven execution or tests)
+                try (InputStream fsInput = new FileInputStream("src/main/resources/" + resourceName)) {
+                    if (fsInput == null) {
+                        System.err.println("Config: Unable to find '" + resourceName + "' via direct filesystem path either. Using defaults or environment variables.");
+                        loadDefaultsOrFromEnv();
+                        return;
+                    }
+                    properties.load(fsInput);
+                    System.out.println("Config: Successfully loaded configuration from filesystem path: src/main/resources/" + resourceName);
+                } catch (IOException fsEx) {
+                    System.err.println("Config: IOException while loading '" + resourceName + "' from filesystem. Using defaults or environment variables. Error: " + fsEx.getMessage());
+                    loadDefaultsOrFromEnv();
+                }
+                return; // Exit after attempting filesystem load or defaulting
             }
             properties.load(input);
-            System.out.println("Config: Successfully loaded configuration from " + propertiesFilePath);
+            System.out.println("Config: Successfully loaded configuration from classpath: " + resourceName);
         } catch (IOException ex) {
-            System.err.println("Config: IOException while loading " + propertiesFilePath + ". Using defaults or environment variables. Error: " + ex.getMessage());
+            System.err.println("Config: IOException while loading '" + resourceName + "' from classpath. Using defaults or environment variables. Error: " + ex.getMessage());
             loadDefaultsOrFromEnv();
         }
     }
 
     private void loadDefaultsOrFromEnv() {
         // Fallback to environment variables if properties file is not found or keys are missing
+        // Also ensures that if a property is explicitly empty in the file, env var doesn't override it unless desired.
         // This makes it flexible for deployment (e.g. Docker)
         setIfNotSet(KITE_API_KEY, System.getenv("KITE_API_KEY"));
         setIfNotSet(KITE_USER_ID, System.getenv("KITE_USER_ID"));

@@ -6,13 +6,15 @@ import com.example.trading.indicators.IndicatorCalculator;
 import com.example.trading.kite.KiteService;
 import com.example.trading.order.OrderManager;
 import com.example.trading.strategy.ORBStrategy;
-// import com.example.trading.util.Config; // Assuming Config class will be created
-// import com.example.trading.util.LoggingUtil; // Assuming LoggingUtil will be created
+import com.example.trading.util.Config; // Import Config
+import com.example.trading.util.LoggingUtil; // Import LoggingUtil
 
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Scanner;
+import java.util.stream.Collectors;
 
 /**
  * Main class for the Intraday Trading System.
@@ -21,8 +23,8 @@ import java.util.Scanner;
 public class TradingSystemMain {
 
     // Declare components
-    // private static Config config; // Will be created in a later step
-    // private static LoggingUtil logger; // Will be created in a later step
+    private static Config config; // Config instance
+    // private static LoggingUtil logger; // LoggingUtil methods are static
     private static KiteService kiteService;
     private static TimeSeriesManager timeSeriesManager;
     private static IndicatorCalculator indicatorCalculator; // May not need an instance if all methods are static
@@ -32,25 +34,27 @@ public class TradingSystemMain {
 
 
     public static void main(String[] args) {
-        System.out.println("Intraday Trading System Starting...");
+        // 1. Initialize Configuration and Logging
+        config = new Config(); // Loads from config.properties
+        LoggingUtil.setLevel(config.getLogLevel()); // Set log level from config
+        LoggingUtil.info("Intraday Trading System Starting...");
+        LoggingUtil.info("TradingSystemMain: Initializing components...");
 
-        // 1. Initialize Utilities (Config and Logging will be done in a dedicated step)
-        System.out.println("TradingSystemMain: Initializing components...");
+        // --- Load Core Credentials from Config ---
+        String apiKey = config.getApiKey();
+        String userId = config.getUserId();
+        String apiSecret = config.getApiSecret(); // Needed for generating session
+        String existingAccessToken = config.getAccessToken();
 
-        // --- Configuration (Simulated for now) ---
-        // In a real app, these would come from a Config class, reading from a file or env vars.
-        String apiKey = System.getenv("KITE_API_KEY");
-        String userId = System.getenv("KITE_USER_ID");
-        String requestToken = ""; // Obtained via manual login for the first session generation
-        String existingAccessToken = System.getenv("KITE_ACCESS_TOKEN"); // For subsequent runs
+        Scanner scanner = new Scanner(System.in); // For interactive input if credentials missing
 
-        Scanner scanner = new Scanner(System.in); // For interactive input if needed
-
-        if (apiKey == null || apiKey.trim().isEmpty()) {
+        if (apiKey == null || apiKey.trim().isEmpty() || apiKey.equals("YOUR_API_KEY_HERE")) {
+            LoggingUtil.warning("API Key not found in config.properties or is default.");
             System.out.print("Enter Kite API Key: ");
             apiKey = scanner.nextLine();
         }
-        if (userId == null || userId.trim().isEmpty()) {
+        if (userId == null || userId.trim().isEmpty() || userId.equals("YOUR_USER_ID_HERE")) {
+            LoggingUtil.warning("User ID not found in config.properties or is default.");
             System.out.print("Enter Kite User ID: ");
             userId = scanner.nextLine();
         }
@@ -58,186 +62,202 @@ public class TradingSystemMain {
         // 2. Initialize Core Services
         kiteService = new KiteService(apiKey, userId);
 
-        // Session Management: Prefer existing access token. If not found, use request token.
-        if (existingAccessToken != null && !existingAccessToken.trim().isEmpty()) {
-            System.out.println("Using existing KITE_ACCESS_TOKEN.");
+        // Session Management:
+        // Prefer existing access token from config. If not valid/present, try to generate a new one.
+        if (existingAccessToken != null && !existingAccessToken.trim().isEmpty() && !existingAccessToken.equals("YOUR_ACCESS_TOKEN_HERE_IF_ALREADY_GENERATED")) {
+            LoggingUtil.info("Using existing Access Token from config.");
             kiteService.setAccessToken(existingAccessToken);
+            // TODO: Add a check here to verify if the accessToken is still valid.
+            // If not valid, then proceed to generate a new one.
         } else {
-            System.out.print("Enter Kite Request Token (if you need to generate a new session, API secret will be required by actual SDK): ");
-            requestToken = scanner.nextLine();
+            LoggingUtil.info("Existing Access Token not found or is default in config. Attempting to generate a new session.");
+            System.out.print("Enter Kite Request Token (obtained after manual login for generating a new session): ");
+            String requestToken = scanner.nextLine();
             if (requestToken != null && !requestToken.trim().isEmpty()) {
-                // The actual KiteConnect.generateSession needs API Secret.
-                // The current KiteService skeleton's generateSession is a simplified placeholder.
-                // String apiSecret = System.getenv("KITE_API_SECRET");
-                // if (apiSecret == null || apiSecret.trim().isEmpty()) { System.out.print("Enter API Secret: "); apiSecret = scanner.nextLine(); }
-                // kiteService.generateSession(requestToken, apiSecret); // This would be the actual call
-                kiteService.generateSession(requestToken); // Using skeleton version
+                if (apiSecret == null || apiSecret.trim().isEmpty() || apiSecret.equals("YOUR_API_SECRET_HERE")) {
+                    LoggingUtil.warning("API Secret not found in config.properties or is default. Required for session generation.");
+                    System.out.print("Enter Kite API Secret: ");
+                    apiSecret = scanner.nextLine();
+                }
+                // Actual KiteConnect SDK's generateSession needs apiSecret.
+                // The KiteService skeleton's generateSession needs to be updated to accept it.
+                // For now, we assume KiteService.generateSession will handle it (or simulate).
+                // kiteService.generateSession(requestToken, apiSecret); // Ideal call
+                kiteService.generateSession(requestToken); // Current skeleton call
+                LoggingUtil.info("Attempted to generate session. Check KiteService logs for status.");
+                // After successful session generation, the new access token should be saved back to config
+                // String newAccessToken = kiteService.getAccessToken(); // Assuming KiteService has such a getter after session generation
+                // if(newAccessToken != null) config.setAccessToken(newAccessToken); // Persist it
             } else {
-                System.err.println("No existing access token or new request token provided. KiteService may not be fully functional for live operations.");
+                LoggingUtil.error("No valid existing access token and no new request token provided. KiteService may not function correctly.");
             }
         }
-        // Not closing System.in scanner here to avoid issues if it's needed elsewhere,
-        // though for this app's structure, it might be okay after initial input.
 
         timeSeriesManager = new TimeSeriesManager();
-        orderManager = new OrderManager(kiteService); // OrderManager uses KiteService
-        indicatorCalculator = new IndicatorCalculator(); // Instance not strictly needed if methods are static
+        orderManager = new OrderManager(kiteService);
+        indicatorCalculator = new IndicatorCalculator();
 
-        // 3. Initialize Strategies
+        // 3. Initialize Strategies based on Config
         strategies = new ArrayList<>();
-        // Example: Add an ORB strategy for a specific instrument.
-        // Instrument tokens, strategy params should ideally come from config.
-        String sampleInstrumentTradingSymbol = "NIFTYBANK"; // Example trading symbol used by strategy for orders
-        long sampleInstrumentTokenForWebSocket = 260105L; // Example: NIFTY BANK Index token for WebSocket subscription
+        List<String> instrumentSymbolsFromConfig = config.getStrategyInstruments();
+        LoggingUtil.info("Instruments from config: " + instrumentSymbolsFromConfig);
 
-        ORBStrategy niftyBankOrb = new ORBStrategy(
-                timeSeriesManager,
-                orderManager,
-                sampleInstrumentTradingSymbol, // Strategy uses this to place orders (needs to be actual trading symbol)
-                15,                          // 15-minute opening range
-                LocalTime.of(9, 15),       // Market open time
-                LocalTime.of(15, 00)       // Strategy stops initiating new trades after this time
-        );
-        strategies.add(niftyBankOrb);
-        System.out.println("TradingSystemMain: ORB Strategy for " + sampleInstrumentTradingSymbol + " initialized.");
+        for (String instrumentSymbol : instrumentSymbolsFromConfig) {
+            // TODO: Load strategy-specific parameters from config (e.g., ORB range, times, quantity)
+            // For simplicity, using hardcoded defaults here, but these should be configurable per instrument.
+            // Example: int orbRange = Integer.parseInt(config.getProperty("strategy.orb." + instrumentSymbol + ".rangeMinutes", "15"));
+            // String wsTokenStr = config.getProperty("strategy.orb." + instrumentSymbol + ".websocketToken");
+            // if (wsTokenStr == null) { LoggingUtil.warning("WebSocket token not found for " + instrumentSymbol); continue; }
+            // long websocketToken = Long.parseLong(wsTokenStr);
+
+            // This is a placeholder for mapping trading symbol to WebSocket numerical token.
+            // In a real system, you'd fetch this mapping from Kite's instrument list or have it configured.
+            long websocketToken; // Needs to be the numerical token for WebSocket subscription
+            if (instrumentSymbol.equalsIgnoreCase("NIFTYBANK")) {
+                websocketToken = 260105L; // Nifty Bank Index
+            } else if (instrumentSymbol.equalsIgnoreCase("RELIANCE")) {
+                websocketToken = 738561L; // Reliance Industries
+            } else {
+                LoggingUtil.warning("No hardcoded WebSocket token for instrument: " + instrumentSymbol + ". Skipping strategy setup for it.");
+                continue;
+            }
+
+
+            ORBStrategy strategy = new ORBStrategy(
+                    timeSeriesManager,
+                    orderManager,
+                    instrumentSymbol, // Trading symbol (e.g., "NIFTYBANK", "RELIANCE")
+                    15,               // Example: ORB minutes
+                    LocalTime.of(9, 15),
+                    LocalTime.of(15, 00)
+            );
+            strategies.add(strategy);
+            LoggingUtil.info("ORB Strategy for " + instrumentSymbol + " (uses WebSocket token: " + websocketToken + ") initialized.");
+        }
 
         // 4. Setup Callbacks for WebSocket and Start Connection
         setupKiteServiceCallbacks();
 
-        // Instruments to subscribe to via WebSocket. These should be derived from strategies or config.
+        // Instruments to subscribe to via WebSocket. Derived from configured strategies.
         ArrayList<Long> tokensToSubscribe = new ArrayList<>();
-        tokensToSubscribe.add(sampleInstrumentTokenForWebSocket); // NIFTY BANK Index
-        // Example: If ORB strategy was for INFY (token 256265L)
-        // String infySymbol = "INFY"; long infyToken = 256265L;
-        // strategies.add(new ORBStrategy(timeSeriesManager, orderManager, infySymbol, ...));
-        // tokensToSubscribe.add(infyToken);
+        // This requires a mapping from instrumentSymbol (used in strategy config) to numerical token for WebSocket
+        // For now, using the hardcoded mapping from above.
+        for (String symbol : instrumentSymbolsFromConfig) {
+            if (symbol.equalsIgnoreCase("NIFTYBANK")) tokensToSubscribe.add(260105L);
+            else if (symbol.equalsIgnoreCase("RELIANCE")) tokensToSubscribe.add(738561L);
+            // else add other mappings or fetch dynamically
+        }
+        // Ensure no duplicates if multiple strategies use the same token
+        List<Long> distinctTokens = tokensToSubscribe.stream().distinct().collect(Collectors.toList());
 
 
-        System.out.println("TradingSystemMain: Attempting to connect WebSocket for tokens: " + tokensToSubscribe);
-        kiteService.connectWebSocket(tokensToSubscribe); // Initiates connection and subscribes on successful connect.
+        LoggingUtil.info("Attempting to connect WebSocket for tokens: " + distinctTokens);
+        if (!distinctTokens.isEmpty()) {
+            kiteService.connectWebSocket(new ArrayList<>(distinctTokens)); // Initiates connection
+        } else {
+            LoggingUtil.warning("No instruments configured for WebSocket subscription. WebSocket will not connect.");
+        }
+
 
         // 5. Main Application Loop & Shutdown Handling
-        System.out.println("TradingSystemMain: System is running. Waiting for market data and events...");
-        System.out.println("Type 'exit' and press Enter in the console to shutdown gracefully.");
+        LoggingUtil.info("System is running. Waiting for market data and events...");
+        LoggingUtil.info("Type 'exit' and press Enter in the console to shutdown gracefully.");
+
 
         // Start a separate thread to listen for console input for shutdown
         Thread consoleListenerThread = new Thread(() -> {
-            Scanner consoleScanner = new Scanner(System.in);
+            Scanner consoleScannerForExit = new Scanner(System.in);
             while (isRunning) {
-                if (consoleScanner.hasNextLine()) {
-                    String input = consoleScanner.nextLine();
+                if (consoleScannerForExit.hasNextLine()) {
+                    String input = consoleScannerForExit.nextLine();
                     if ("exit".equalsIgnoreCase(input.trim())) {
-                        System.out.println("TradingSystemMain: 'exit' command received.");
+                        LoggingUtil.info("'exit' command received.");
                         shutdown();
                         break;
                     }
                 }
             }
-            consoleScanner.close(); // Close this scanner when done.
+            consoleScannerForExit.close();
         });
         consoleListenerThread.setName("ConsoleShutdownListener");
         consoleListenerThread.start();
 
         // Register a shutdown hook for graceful termination on Ctrl+C or OS signal
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("TradingSystemMain: JVM Shutdown hook activated.");
+            LoggingUtil.info("JVM Shutdown hook activated.");
             shutdown();
         }));
 
         // Keep the main thread alive while isRunning is true
-        // Callbacks from KiteService will run on their own threads.
         while (isRunning) {
             try {
-                Thread.sleep(1000); // Keep main thread alive, periodically checking isRunning
-                                   // Can also be used for periodic tasks if any (e.g. daily strategy reset)
-                // Example: Daily reset logic
-                // if (LocalTime.now().equals(LocalTime.of(16,0))) { strategies.forEach(ORBStrategy::reset); }
-
+                Thread.sleep(1000); // Keep main thread alive
             } catch (InterruptedException e) {
-                System.out.println("TradingSystemMain: Main application thread interrupted.");
-                Thread.currentThread().interrupt(); // Preserve interrupt status
-                shutdown(); // Initiate shutdown if interrupted
+                LoggingUtil.info("Main application thread interrupted.");
+                Thread.currentThread().interrupt();
+                shutdown();
             }
         }
-        System.out.println("TradingSystemMain: Exiting main method.");
+        LoggingUtil.info("Exiting main method.");
+        scanner.close(); // Close the initial scanner if it's still open and not System.in itself.
     }
 
     private static void setupKiteServiceCallbacks() {
         kiteService.setOnTickCallback((TickData tick) -> {
-            // Distribute tick to TimeSeriesManager
             timeSeriesManager.addTick(tick);
-
-            // After tick is processed and candles are potentially updated, evaluate strategies.
             for (ORBStrategy strategy : strategies) {
-                // The strategy's instrumentToken should match the tick's instrument for evaluation.
-                // ORBStrategy's instrumentToken is the trading symbol, TickData has Kite's numerical token.
-                // This needs a mapping if they are different or strategy needs to handle numerical token.
-                // For now, assuming strategy internally matches or is broadly evaluated.
-                // A better approach: strategy registers for specific instrument tokens.
-                // For the skeleton, ORBStrategy uses a string token; KiteService uses long tokens for WebSocket.
-                // This needs alignment. Let's assume TickData.getInstrumentToken() returns the String symbol for now,
-                // or ORBStrategy is adapted to use the long token.
-                // If ORBStrategy's instrumentToken is the one to check against:
-                // if (strategy.getInstrumentToken().equals(tick.getInstrumentToken())) {
-                //     strategy.evaluate();
-                // }
-                // For now, let's assume strategy.evaluate() is smart enough or we match on a common ID.
-                // The current ORBStrategy constructor takes a String `instrumentToken`.
-                // The current TickData constructor also takes a String `instrumentToken`.
-                // So, if these are consistent (e.g., both are "NIFTYBANK" or "260105"), it can work.
-                // Let's refine the ORBStrategy to be clear on what token it expects.
-                // If tick.getInstrumentToken() is the one used for WebSocket (long, but passed as String in TickData):
-
-                // The current ORBStrategy is initialized with sampleInstrumentTradingSymbol ("NIFTYBANK")
-                // The TickData created from Kite Ticker (in KiteService, once fully implemented) will likely have the numerical token (e.g. "260105")
-                // This comparison will fail unless ORBStrategy is initialized with the numerical token as string, or a mapping is used.
-                // For this skeleton, let's assume the strategy's token and tick's token are made consistent.
-                if (strategy.getInstrumentToken().equals(tick.getInstrumentToken())) {
+                // TickData.instrumentToken is assumed to be the numerical token as String.
+                // ORBStrategy.instrumentToken is the trading symbol (e.g. "NIFTYBANK").
+                // This requires a mapping. For now, we'll assume strategy.evaluate() handles this or
+                // the tokens are aligned during strategy setup.
+                // A practical approach: strategies subscribe to numerical tokens, and TickData carries that.
+                // The ORBStrategy would need to be initialized with or map its trading symbol to the numerical token.
+                // For this skeleton, let's assume TickData.getInstrumentToken() returns a string that can be matched
+                // by strategy.getInstrumentToken() if they are configured consistently.
+                // This part needs careful implementation for a real system.
+                // Example: if (strategy.getWebSocketToken().equals(tick.getInstrumentToken()))
+                if (strategy.getInstrumentToken().equals(mapNumericalTokenToSymbol(tick.getInstrumentToken()))) {
                      strategy.evaluate();
                 }
             }
         });
 
         kiteService.setOnConnectCallback(() -> {
-            System.out.println("TradingSystemMain: Kite WebSocket connected successfully!");
-            // Subscription logic is handled within KiteService's onConnected based on tokens passed to connectWebSocket.
+            LoggingUtil.info("Kite WebSocket connected successfully!");
         });
 
         kiteService.setOnDisconnectCallback(() -> {
-            System.out.println("TradingSystemMain: Kite WebSocket disconnected.");
-            // TODO: Implement robust reconnection strategy here or in KiteService.
+            LoggingUtil.warning("Kite WebSocket disconnected.");
+            // TODO: Implement robust reconnection strategy.
         });
 
         kiteService.setOnErrorCallback((String errorMsg) -> {
-            System.err.println("TradingSystemMain: Kite WebSocket error: " + errorMsg);
+            LoggingUtil.error("Kite WebSocket error: " + errorMsg);
         });
 
         // TODO: Setup callback for order updates from KiteService to OrderManager
-        // This is crucial for tracking actual order fills and status changes.
-        // Example (conceptual, depends on how KiteService exposes order updates):
-        // kiteService.setOnOrderUpdateCallback(orderUpdate -> { // orderUpdate would be a custom class/map
-        //     orderManager.updateOrderStatus(
-        //         orderUpdate.getOrderId(), // String
-        //         orderUpdate.getStatus(),  // String e.g. "COMPLETE", "CANCELLED", "REJECTED"
-        //         orderUpdate.getFilledQuantity(), // int
-        //         orderUpdate.getAveragePrice()    // double
-        //         // Potentially other fields like: orderUpdate.getExchangeTimestamp(), orderUpdate.getMessage()
-        //     );
-        // });
     }
+
+    // Placeholder for mapping numerical token (as string) from tick to trading symbol
+    // This should be replaced with a robust lookup mechanism (e.g., from a preloaded instrument list)
+    private static String mapNumericalTokenToSymbol(String numericalToken) {
+        if ("260105".equals(numericalToken)) return "NIFTYBANK";
+        if ("738561".equals(numericalToken)) return "RELIANCE";
+        // Add more mappings or use a proper lookup
+        return numericalToken; // Fallback, likely won't match
+    }
+
 
     private static synchronized void shutdown() {
         if (!isRunning) {
-            return; // Shutdown already in progress or completed
+            return;
         }
-        System.out.println("TradingSystemMain: Initiating shutdown sequence...");
-        isRunning = false; // Signal other loops or threads to stop
+        LoggingUtil.info("Initiating shutdown sequence...");
+        isRunning = false;
 
         if (kiteService != null) {
             kiteService.disconnectWebSocket();
         }
-        // Add any other cleanup tasks here (e.g., ensuring strategies save state if needed, closing resources)
-        System.out.println("TradingSystemMain: System shutdown actions complete. Exiting.");
-        // System.exit(0) // Can be used for a forceful exit if necessary, but JVM should exit if all non-daemon threads complete.
+        LoggingUtil.info("System shutdown actions complete. Exiting.");
     }
 }

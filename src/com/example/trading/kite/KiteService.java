@@ -1,486 +1,457 @@
 package com.example.trading.kite;
 
-// TODO: Import necessary classes from the Zerodha Kite Connect SDK
-// import com.zerodhatech.kiteconnect.KiteConnect;
-// import com.zerodhatech.kiteconnect.kitehttp.exceptions.KiteException;
-// import com.zerodhatech.models.HistoricalData;
-// import com.zerodhatech.models.Tick;
-// import com.zerodhatech.models.Depth;
-// import com.zerodhatech.models.User;
-// import com.zerodhatech.ticker.KiteTicker;
-// import com.zerodhatech.ticker.OnConnect;
-// import com.zerodhatech.ticker.OnDisconnect;
-// import com.zerodhatech.ticker.OnError;
-// import com.zerodhatech.ticker.OnTicks;
-// import com.zerodhatech.ticker.OnOrderUpdate; // If handling order updates via WebSocket
+import com.zerodhatech.kiteconnect.KiteConnect;
+import com.zerodhatech.kiteconnect.kitehttp.exceptions.KiteException;
+import com.zerodhatech.models.HistoricalData;
+import com.zerodhatech.models.User;
+import com.zerodhatech.models.Order; // For potential future use (order updates, placement response)
+import com.zerodhatech.models.OrderParams; // For potential future use (placing orders)
 
-import com.example.trading.core.Candle; // For transforming historical data
-import com.example.trading.core.TickData; // For transforming live ticks
-import com.example.trading.core.MarketDepth; // For transforming live depth
+import com.zerodhatech.ticker.KiteTicker;
+import com.zerodhatech.ticker.OnConnect;
+import com.zerodhatech.ticker.OnDisconnect;
+import com.zerodhatech.ticker.OnError;
+import com.zerodhatech.ticker.OnTicks;
+import com.zerodhatech.models.Tick; // Correct model for live ticks from KiteTicker
+// import com.zerodhatech.ticker.OnOrderUpdate; // If using order updates via WebSocket
 
-import java.io.IOException;
+import com.example.trading.core.Candle;
+import com.example.trading.core.TickData;
+import com.example.trading.core.MarketDepth; // For our MarketDepth model
+import com.zerodhatech.models.Depth; // For Kite's depth model within a Tick
+
+import com.example.trading.util.LoggingUtil;
+
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-/**
- * Service class for interacting with the Zerodha Kite Connect API.
- * Handles authentication, data fetching (historical, live), and order placement.
- */
 public class KiteService {
 
-    // private KiteConnect kiteConnect;
-    // private KiteTicker kiteTicker;
+    private KiteConnect kiteConnect;
+    private KiteTicker kiteTicker;
     private String apiKey;
     private String userId;
-    private String accessToken; // This is the request_token initially, then accessToken after session generation
+    private String accessToken;
+    private String publicToken;
 
     private Consumer<TickData> onTickCallback;
-    private Consumer<MarketDepth> onDepthCallback;
-    private Runnable onConnectCallback;
-    private Runnable onDisconnectCallback;
-    private Consumer<String> onErrorCallback;
+    private Consumer<MarketDepth> onDepthCallback; // For full depth updates if subscribed separately
+    private Runnable onWebSocketConnectCallback;
+    private Runnable onWebSocketDisconnectCallback;
+    private Consumer<String> onWebSocketErrorCallback; // For general WebSocket errors
+    private Consumer<KiteException> onKiteExceptionCallback; // For specific KiteExceptions (REST API mostly)
+    // private Consumer<ArrayList<Tick>> onWebSocketTicksCallback; // Raw ticks if needed
 
 
-    /**
-     * Constructor for KiteService.
-     *
-     * @param apiKey    Your Kite API key.
-     * @param userId    Your Kite User ID.
-     */
     public KiteService(String apiKey, String userId) {
         this.apiKey = apiKey;
         this.userId = userId;
-        // this.kiteConnect = new KiteConnect(apiKey);
-        // TODO: Set redirect URL if needed for login flow: kiteConnect.setRedirectUrl("YOUR_REDIRECT_URL");
-        System.out.println("KiteService initialized with API Key and User ID.");
+        this.kiteConnect = new KiteConnect(this.apiKey);
+        this.kiteConnect.setUserId(this.userId);
+        LoggingUtil.info("KiteService initialized with API Key: " + apiKey + " and User ID: " + userId);
+        LoggingUtil.info("Kite Login URL (for obtaining request_token): " + this.kiteConnect.getLoginURL());
     }
 
-    /**
-     * Sets the access token required for API calls after successful login.
-     * This is obtained after the initial login flow.
-     *
-     * @param accessToken The access token.
-     */
+    public void setTokens(String accessToken, String publicToken) {
+        this.accessToken = accessToken;
+        this.publicToken = publicToken;
+        this.kiteConnect.setAccessToken(this.accessToken);
+        if (this.publicToken != null) {
+            this.kiteConnect.setPublicToken(this.publicToken);
+        }
+        LoggingUtil.info("Access token set in KiteService. Public token " + (this.publicToken != null ? "set." : "not set."));
+    }
+
     public void setAccessToken(String accessToken) {
         this.accessToken = accessToken;
-        // try {
-        //     User user = this.kiteConnect.setAccessToken(accessToken);
-        //     this.kiteConnect.setPublicToken(user.publicToken); // For WebSocket
-        //     System.out.println("KiteConnect session established. User: " + user.userName);
-        // } catch (KiteException e) {
-        //     System.err.println("Error setting access token: " + e.getMessage());
-        //     // Handle exception: log, notify, etc.
-        // } catch (Exception e) {
-        //     System.err.println("Unexpected error during access token setup: " + e.getMessage());
-        // }
-        System.out.println("Access token set (simulated).");
+        this.kiteConnect.setAccessToken(accessToken);
+        LoggingUtil.info("Access token set. Public token may need to be set via setTokens or after generateSession for WebSocket.");
     }
 
-    /**
-     * Generates a Kite Connect session using the request token.
-     * This is part of the login flow.
-     *
-     * @param requestToken The request token obtained after user login.
-     */
+    public String getAccessToken() {
+        return this.accessToken;
+    }
+
+    public String getPublicToken() {
+        return this.publicToken;
+    }
+
+    public void generateSession(String requestToken, String apiSecret) {
+        try {
+            User user = kiteConnect.generateSession(requestToken, apiSecret);
+            setTokens(user.accessToken, user.publicToken);
+            LoggingUtil.info("KiteConnect session generated successfully for user: " + user.userName);
+        } catch (KiteException e) {
+            LoggingUtil.error("KiteException during session generation: " + e.getMessage() + ", Code: " + e.getCode(), e);
+            if (onKiteExceptionCallback != null) onKiteExceptionCallback.accept(e);
+        } catch (Exception e) {
+            LoggingUtil.error("Unexpected error during session generation: " + e.getMessage(), e);
+        }
+    }
+
     public void generateSession(String requestToken) {
-        // try {
-        //     User user = kiteConnect.generateSession(requestToken, "YOUR_API_SECRET"); // Replace with your API Secret
-        //     setAccessToken(user.accessToken);
-        //     System.out.println("Session generated successfully for user: " + user.userName);
-        // } catch (KiteException e) {
-        //     System.err.println("KiteException during session generation: " + e.getMessage() + ", Code: " + e.getCode());
-        //     // Handle KiteException (e.g., invalid token, network issues)
-        // } catch (Exception e) {
-        //     System.err.println("Unexpected error during session generation: " + e.getMessage());
-        //     // Handle other exceptions
-        // }
-        System.out.println("Session generation called with request token (simulated). Setting a dummy access token.");
-        setAccessToken("dummy_access_token_from_session_generation"); // Simulate for skeleton
+        LoggingUtil.error("Simplified generateSession(requestToken) called. API secret is required. Use generateSession(requestToken, apiSecret).");
+        if (onKiteExceptionCallback != null) {
+            onKiteExceptionCallback.accept(new KiteException("API Secret is required for session generation.", 0));
+        }
     }
 
-
-    /**
-     * Fetches historical candle data for a given instrument and period.
-     *
-     * @param instrumentToken The instrument token (e.g., "NSE:INFY" or numerical token).
-     * @param fromDate        The start date for historical data.
-     * @param toDate          The end date for historical data.
-     * @param interval        The candle interval (e.g., "minute", "5minute", "day").
-     * @return A list of Candle objects.
-     */
     public List<Candle> getHistoricalData(String instrumentToken, LocalDate fromDate, LocalDate toDate, String interval) {
-        System.out.println("Fetching historical data for " + instrumentToken + " from " + fromDate + " to " + toDate + " interval " + interval + " (simulated).");
-        // TODO: Implement actual Kite Connect SDK call
-        // try {
-        //     Date from = java.sql.Timestamp.valueOf(fromDate.atStartOfDay());
-        //     Date to = java.sql.Timestamp.valueOf(toDate.atTime(23, 59, 59));
-        //     HistoricalData historicalData = kiteConnect.getHistoricalData(from, to, instrumentToken, interval, false, true); // continuous=false, oi=true (if needed)
-        //     return transformToCandles(historicalData, instrumentToken);
-        // } catch (KiteException e) {
-        //     System.err.println("KiteException fetching historical data for " + instrumentToken + ": " + e.getMessage());
-        // } catch (Exception e) {
-        //     System.err.println("Unexpected error fetching historical data for " + instrumentToken + ": " + e.getMessage());
-        // }
-        return new ArrayList<>(); // Return empty list on error or for skeleton
+        LoggingUtil.info("Fetching historical data for token " + instrumentToken + " from " + fromDate + " to " + toDate + " interval " + interval);
+        if (this.accessToken == null) {
+            LoggingUtil.error("Access token is null. Cannot fetch historical data for " + instrumentToken);
+            return new ArrayList<>();
+        }
+        try {
+            Date from = Date.from(fromDate.atStartOfDay(ZoneId.systemDefault()).toInstant());
+            Date to = Date.from(toDate.atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant());
+            HistoricalData historicalData = kiteConnect.getHistoricalData(from, to, instrumentToken, interval, false, false);
+            return transformToCandles(historicalData, instrumentToken);
+        } catch (KiteException e) {
+            LoggingUtil.error("KiteException fetching historical data for " + instrumentToken + ": " + e.getMessage() + " Code: " + e.code, e);
+            if (onKiteExceptionCallback != null) onKiteExceptionCallback.accept(e);
+        } catch (Exception e) {
+            LoggingUtil.error("Unexpected error fetching historical data for " + instrumentToken + ": " + e.getMessage(), e);
+        }
+        return new ArrayList<>();
     }
 
-    /**
-     * Transforms KiteConnect's HistoricalData into a list of our Candle objects.
-     */
-    // private List<Candle> transformToCandles(HistoricalData historicalData, String instrumentToken) {
-    //     List<Candle> candles = new ArrayList<>();
-    //     if (historicalData != null && historicalData.dataArrayList != null) {
-    //         for (com.zerodhatech.models.HistoricalData.CandleData kd : historicalData.dataArrayList) {
-    //             // Ensure timestamp parsing is robust. KiteConnect historical data usually provides Date objects.
-    //             // ZonedDateTime zdt = ZonedDateTime.parse(kd.timeStamp); // This was for string timestamps
-    //             ZonedDateTime zdt = kd.timeStamp.toInstant().atZone(ZoneId.systemDefault()); // If kd.timeStamp is java.util.Date
-    //             candles.add(new Candle(zdt, instrumentToken, kd.open, kd.high, kd.low, kd.close, kd.volume));
-    //         }
-    //     }
-    //     return candles;
-    // }
+    private List<Candle> transformToCandles(HistoricalData kiteHistoricalData, String instrumentToken) {
+        List<Candle> candles = new ArrayList<>();
+        if (kiteHistoricalData != null && kiteHistoricalData.dataArrayList != null) {
+            SimpleDateFormat kiteTimestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ");
+            for (com.zerodhatech.models.HistoricalData.CandleData kd : kiteHistoricalData.dataArrayList) {
+                ZonedDateTime zdt = null;
+                try {
+                    if (kd.timeStamp instanceof String) {
+                        Date parsedDate = kiteTimestampFormat.parse((String) kd.timeStamp);
+                        zdt = parsedDate.toInstant().atZone(ZoneId.systemDefault());
+                    } else if (kd.timeStamp instanceof Date) {
+                        zdt = ((Date) kd.timeStamp).toInstant().atZone(ZoneId.systemDefault());
+                    } else {
+                        LoggingUtil.warning("Unknown timestamp type for historical data: " + kd.timeStamp.getClass().getName() + " for token " + instrumentToken);
+                        continue;
+                    }
+                    candles.add(new Candle(zdt, instrumentToken, kd.open, kd.high, kd.low, kd.close, kd.volume));
+                } catch (ParseException e) {
+                    LoggingUtil.error("Error parsing date string from historical data: " + kd.timeStamp + " for token " + instrumentToken, e);
+                }
+            }
+        }
+        return candles;
+    }
 
-    /**
-     * Fetches the Previous Day High (PDH) for a given instrument.
-     *
-     * @param instrumentToken The instrument token.
-     * @param targetDate      The date for which PDH is needed (it will fetch data for targetDate - 1 trading day).
-     * @return The PDH value, or -1 if not found.
-     */
+    private LocalDate getPreviousTradingDay(LocalDate date) {
+        LocalDate prevDate = date.minusDays(1);
+        while (prevDate.getDayOfWeek() == DayOfWeek.SATURDAY || prevDate.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            prevDate = prevDate.minusDays(1);
+        }
+        return prevDate;
+    }
+
     public double getPreviousDayHigh(String instrumentToken, LocalDate targetDate) {
         LoggingUtil.info("Fetching Previous Day High for " + instrumentToken + " relative to " + targetDate);
-        // TODO: Determine the actual previous trading day, skipping weekends/holidays.
-        // For simplicity, this skeleton assumes targetDate.minusDays(1) is a trading day.
-        // A robust implementation needs a market holiday calendar.
-        LocalDate previousTradingDay = targetDate.minusDays(1); // Simplified: assumes previous day was a trading day
-        // In a real scenario, you'd loop backwards from targetDate-1 until a valid trading day is found.
-
-        // List<Candle> dailyCandles = getHistoricalData(instrumentToken, previousTradingDay, previousTradingDay, "day");
-        // if (dailyCandles != null && !dailyCandles.isEmpty()) {
-        //     LoggingUtil.debug("PDH for " + instrumentToken + " on " + previousTradingDay + " is " + dailyCandles.get(0).getHigh());
-        //     return dailyCandles.get(0).getHigh();
-        // }
-        // LoggingUtil.warning("Could not fetch PDH for " + instrumentToken + " on " + previousTradingDay);
-        return -1.0; // Placeholder for actual implementation
+        LocalDate previousTradingDay = getPreviousTradingDay(targetDate);
+        List<Candle> dailyCandles = getHistoricalData(instrumentToken, previousTradingDay, previousTradingDay, "day");
+        if (dailyCandles != null && !dailyCandles.isEmpty()) {
+            LoggingUtil.debug("PDH for " + instrumentToken + " on " + previousTradingDay + " is " + dailyCandles.get(0).getHigh());
+            return dailyCandles.get(0).getHigh();
+        }
+        LoggingUtil.warning("Could not fetch PDH for " + instrumentToken + " for previous trading day of " + targetDate);
+        return -1.0;
     }
 
-    /**
-     * Fetches the Previous Day Close (PDC) for a given instrument.
-     *
-     * @param instrumentToken The instrument token (numerical, as String).
-     * @param targetDate      The date for which PDC is needed (it will fetch data for targetDate - 1 trading day).
-     * @return The PDC value, or -1.0 if not found or error.
-     */
     public double getPreviousDayClose(String instrumentToken, LocalDate targetDate) {
         LoggingUtil.info("Fetching Previous Day Close for " + instrumentToken + " relative to " + targetDate);
-        // TODO: Determine the actual previous trading day, skipping weekends/holidays.
-        // For simplicity, this skeleton assumes targetDate.minusDays(1) is a trading day.
-        LocalDate previousTradingDay = targetDate.minusDays(1); // Simplified
-
-        // try {
-        //     // KiteConnect historical data uses Date objects.
-        //     // From: Start of the previous trading day. To: End of the previous trading day.
-        //     Date from = Date.from(previousTradingDay.atStartOfDay(ZoneId.systemDefault()).toInstant());
-        //     Date to = Date.from(previousTradingDay.atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant());
-        //
-        //     // Assuming kiteConnect is initialized and session is valid.
-        //     // HistoricalData historicalData = this.kiteConnect.getHistoricalData(from, to, instrumentToken, "day", false, false);
-        //     //
-        //     // if (historicalData != null && historicalData.dataArrayList != null && !historicalData.dataArrayList.isEmpty()) {
-        //     //     com.zerodhatech.models.HistoricalData.CandleData dayCandle = historicalData.dataArrayList.get(0);
-        //     //     LoggingUtil.debug("PDC for " + instrumentToken + " on " + previousTradingDay + " is " + dayCandle.close);
-        //     //     return dayCandle.close;
-        //     // } else {
-        //     //     LoggingUtil.warning("No daily historical data found for " + instrumentToken + " for date " + previousTradingDay);
-        //     // }
-        // } catch (KiteException e) {
-        //     LoggingUtil.error("KiteException fetching PDC for " + instrumentToken + " on " + previousTradingDay + ": " + e.getMessage(), e);
-        // } catch (Exception e) {
-        //     LoggingUtil.error("Unexpected error fetching PDC for " + instrumentToken + " on " + previousTradingDay + ": " + e.getMessage(), e);
-        // }
-        // LoggingUtil.warning("Could not fetch PDC for " + instrumentToken + " on " + previousTradingDay);
-        // For skeleton, returning a dummy value:
-        if (instrumentToken.equals("260105")) return 48000.0; // Dummy PDC for NIFTYBANK
-        if (instrumentToken.equals("738561")) return 2900.0; // Dummy PDC for RELIANCE
-        return 100.0; // Default dummy
+        LocalDate previousTradingDay = getPreviousTradingDay(targetDate);
+        List<Candle> dailyCandles = getHistoricalData(instrumentToken, previousTradingDay, previousTradingDay, "day");
+        if (dailyCandles != null && !dailyCandles.isEmpty()) {
+            LoggingUtil.debug("PDC for " + instrumentToken + " on " + previousTradingDay + " is " + dailyCandles.get(0).getClose());
+            return dailyCandles.get(0).getClose();
+        }
+        LoggingUtil.warning("Could not fetch PDC for " + instrumentToken + " for previous trading day of " + targetDate);
+        return -1.0;
     }
-
 
     // --- WebSocket Methods ---
+    public void connectWebSocket(ArrayList<Long> tokensToSubscribe) {
+        if (this.accessToken == null || this.publicToken == null || this.apiKey == null) {
+            LoggingUtil.error("Cannot connect WebSocket: Missing critical credentials (accessToken, publicToken, or apiKey).");
+            if (onWebSocketErrorCallback != null) onWebSocketErrorCallback.accept("WebSocket connection failed: Missing credentials.");
+            return;
+        }
 
-    /**
-     * Initializes and starts the WebSocket connection for live data.
-     *
-     * @param tokens List of instrument tokens to subscribe to.
-     */
-    public void connectWebSocket(ArrayList<Long> tokens) { // KiteTicker typically uses Long for instrument tokens
-        System.out.println("Connecting to WebSocket for tokens: " + tokens + " (simulated).");
-        // if (this.accessToken == null || this.apiKey == null) {
-        //     System.err.println("Access token or API key is null. Cannot connect WebSocket.");
-        //     if (onErrorCallback != null) onErrorCallback.accept("WebSocket connection failed: Missing credentials.");
-        //     return;
-        // }
-        //
-        // kiteTicker = new KiteTicker(this.accessToken, this.apiKey);
-        //
-        // kiteTicker.setOnConnectedListener(new OnConnect() {
-        //     @Override
-        //     public void onConnected() {
-        //         System.out.println("WebSocket Connected.");
-        //         if (onConnectCallback != null) onConnectCallback.run();
-        //         // Subscribe to full mode for ticks (includes price, volume, depth)
-        //         // Or use setMode for specific fields if needed
-        //         kiteTicker.subscribe(tokens);
-        //         kiteTicker.setMode(tokens, KiteTicker.modeFull); // modeFull gives tick, and 5 depth
-        //     }
+        if (kiteTicker != null && kiteTicker.isConnectionOpen()) {
+            LoggingUtil.info("WebSocket already connected or connecting. Subscribing to additional tokens if any.");
+            kiteTicker.subscribe(tokensToSubscribe); // Subscribe to new tokens
+            kiteTicker.setMode(tokensToSubscribe, KiteTicker.modeFull); // Ensure mode is set for new tokens
+            return;
+        }
+
+        LoggingUtil.info("Attempting to connect WebSocket for tokens: " + tokensToSubscribe);
+        kiteTicker = new KiteTicker(this.accessToken, this.apiKey); // Public token often not needed for constructor, but for session.
+                                                                     // Some SDK versions might use public_token from setAccessToken.
+                                                                     // Let's assume the SDK handles this based on prior setAccessToken/setPublicToken on KiteConnect obj.
+                                                                     // If specific constructor needed: new KiteTicker(this.accessToken, this.apiKey, this.publicToken);
+
+        kiteTicker.setOnConnectedListener(() -> {
+            LoggingUtil.info("WebSocket Connected.");
+            if (onWebSocketConnectCallback != null) {
+                onWebSocketConnectCallback.run();
+            }
+            if (tokensToSubscribe != null && !tokensToSubscribe.isEmpty()) {
+                kiteTicker.subscribe(tokensToSubscribe);
+                // Set mode for ticks. modeQuote for basic LTP, modeFull for LTP, depth, volume etc.
+                kiteTicker.setMode(tokensToSubscribe, KiteTicker.modeFull);
+                LoggingUtil.info("Subscribed to tokens: " + tokensToSubscribe + " with modeFull.");
+            }
+        });
+
+        kiteTicker.setOnDisconnectedListener(() -> {
+            LoggingUtil.warning("WebSocket Disconnected.");
+            if (onWebSocketDisconnectCallback != null) {
+                onWebSocketDisconnectCallback.run();
+            }
+            // TODO: Implement reconnection logic here or notify main application
+        });
+
+        kiteTicker.setOnErrorListener(e -> {
+            LoggingUtil.error("WebSocket Error: " + e.getMessage(), e);
+            if (onWebSocketErrorCallback != null) {
+                onWebSocketErrorCallback.accept("WebSocket error: " + e.getMessage());
+            }
+            // Handle specific errors, e.g., token invalid, connection refused
+        });
+
+        kiteTicker.setOnTickerArrivalListener(ticks -> {
+            // LoggingUtil.debug("Ticks arrived: " + ticks.size());
+            transformAndPassKiteTicksToCallback(ticks);
+        });
+
+        // Optional: Order updates via WebSocket
+        // kiteTicker.setOnOrderUpdateListener(order -> {
+        //     LoggingUtil.info("Order Update via WebSocket: " + order.orderId + ", Status: " + order.status);
+        //     // TODO: Propagate this to OrderManager or a dedicated callback
         // });
-        //
-        // kiteTicker.setOnDisconnectedListener(new OnDisconnect() {
-        //     @Override
-        //     public void onDisconnected() {
-        //         System.out.println("WebSocket Disconnected.");
-        //         if (onDisconnectCallback != null) onDisconnectCallback.run();
-        //     }
-        // });
-        //
-        // kiteTicker.setOnErrorListener(new OnError() {
-        //     @Override
-        //     public void onError(Exception e) {
-        //         System.err.println("WebSocket Error: " + e.getMessage());
-        //         if (onErrorCallback != null) onErrorCallback.accept("WebSocket error: " + e.getMessage());
-        //     }
-        //     // You might need to handle other onError signatures depending on the SDK version
-        // });
-        //
-        // kiteTicker.setOnTickerArrivalListener(new OnTicks() {
-        //     @Override
-        //     public void onTicks(ArrayList<Tick> ticks) {
-        //         if (onTickCallback != null) {
-        //             for (Tick tick : ticks) {
-        //                 TickData td = transformToTickData(tick);
-        //                 onTickCallback.accept(td);
-        //
-        //                 // The KiteTicker's modeFull also pushes depth updates via onTicks
-        //                 // We need to extract and process depth if available in the Tick object
-        //                 if (tick.getMarketDepth() != null && onDepthCallback != null) {
-        //                     MarketDepth md = transformToMarketDepth(tick);
-        //                     onDepthCallback.accept(md);
-        //                 }
-        //             }
-        //         }
-        //     }
-        // });
-        //
-        // // Optional: If you handle order updates through WebSocket
-        // // kiteTicker.setOnOrderUpdateListener(new OnOrderUpdate() {
-        // //     @Override
-        // //     public void onOrderUpdate(Order order) {
-        // //         System.out.println("Order Update: " + order.orderId + " Status: " + order.status);
-        // //         // TODO: Propagate order updates to OrderManager or relevant component
-        // //     }
-        // // });
-        //
-        // kiteTicker.setTryReconnection(true); // Enable auto-reconnection
-        // kiteTicker.setMaximumRetries(10);
-        // kiteTicker.setMaximumRetryInterval(30);
-        // kiteTicker.connect();
+
+        kiteTicker.setTryReconnection(true);
+        kiteTicker.setMaximumRetries(10); // Example
+        kiteTicker.setMaximumRetryInterval(30); // Example: 30 seconds
+        kiteTicker.connect();
     }
-
-    /**
-     * Transforms a Kite SDK Tick object into our internal TickData representation.
-     */
-    // private TickData transformToTickData(com.zerodhatech.models.Tick kiteTick) {
-    //     ZonedDateTime tickTimestamp = ZonedDateTime.now(); // Kite ticks might have their own timestamp or use arrival time
-    //     if (kiteTick.getTickTimestamp() != null) {
-    //         tickTimestamp = ZonedDateTime.ofInstant(kiteTick.getTickTimestamp().toInstant(), ZoneId.systemDefault());
-    //     } else if (kiteTick.getLastTradeTime() != null) {
-    //          tickTimestamp = ZonedDateTime.ofInstant(kiteTick.getLastTradeTime().toInstant(), ZoneId.systemDefault());
-    //     }
-    //
-    //     String instrumentTokenStr = String.valueOf(kiteTick.getInstrumentToken());
-    //     // MarketDepth might be part of the tick or fetched separately
-    //     // For this skeleton, we assume it might come with the tick if modeFull is used
-    //     MarketDepth md = null;
-    //     if (kiteTick.getMarketDepth() != null && !kiteTick.getMarketDepth().isEmpty()) {
-    //         md = transformToMarketDepth(kiteTick);
-    //     }
-    //
-    //     return new TickData(
-    //             tickTimestamp,
-    //             instrumentTokenStr,
-    //             kiteTick.getLastTradedPrice(),
-    //             kiteTick.getLastTradedQuantity(),
-    //             kiteTick.getVolumeTradedToday(),
-    //             kiteTick.getAverageTradePrice(),
-    //             md
-    //     );
-    // }
-
-    /**
-     * Transforms depth data from a Kite SDK Tick object into our internal MarketDepth representation.
-     * This is relevant when using modeFull with KiteTicker, which includes depth in the tick.
-     */
-    // private MarketDepth transformToMarketDepth(com.zerodhatech.models.Tick kiteTick) {
-    //     String instrumentTokenStr = String.valueOf(kiteTick.getInstrumentToken());
-    //     ZonedDateTime depthTimestamp = ZonedDateTime.now(); // Or use tick's timestamp
-    //     if (kiteTick.getTickTimestamp() != null) {
-    //         depthTimestamp = ZonedDateTime.ofInstant(kiteTick.getTickTimestamp().toInstant(), ZoneId.systemDefault());
-    //     }
-    //
-    //     List<MarketDepth.DepthLevel> bids = new ArrayList<>();
-    //     List<MarketDepth.DepthLevel> asks = new ArrayList<>();
-    //
-    //     Map<String, ArrayList<com.zerodhatech.models.Depth>> depthMap = kiteTick.getMarketDepth();
-    //     if (depthMap != null) {
-    //         ArrayList<com.zerodhatech.models.Depth> bidDepths = depthMap.get("buy");
-    //         if (bidDepths != null) {
-    //             for (com.zerodhatech.models.Depth d : bidDepths) {
-    //                 bids.add(new MarketDepth.DepthLevel(d.getPrice(), d.getQuantity(), d.getOrders()));
-    //             }
-    //         }
-    //         ArrayList<com.zerodhatech.models.Depth> askDepths = depthMap.get("sell");
-    //         if (askDepths != null) {
-    //             for (com.zerodhatech.models.Depth d : askDepths) {
-    //                 asks.add(new MarketDepth.DepthLevel(d.getPrice(), d.getQuantity(), d.getOrders()));
-    //             }
-    //         }
-    //     }
-    //     return new MarketDepth(instrumentTokenStr, depthTimestamp, bids, asks);
-    // }
-
 
     public void disconnectWebSocket() {
-        System.out.println("Disconnecting WebSocket (simulated).");
-        // if (kiteTicker != null && kiteTicker.isConnectionOpen()) {
-        //     kiteTicker.disconnect();
-        // }
+        LoggingUtil.info("disconnectWebSocket called.");
+        if (kiteTicker != null && kiteTicker.isConnectionOpen()) {
+            kiteTicker.disconnect();
+            LoggingUtil.info("WebSocket disconnect initiated.");
+        } else {
+            LoggingUtil.info("WebSocket not connected or already disconnected.");
+        }
     }
+
+    private void transformAndPassKiteTicksToCallback(ArrayList<Tick> kiteTicks) {
+        if (onTickCallback == null) return;
+
+        for (Tick kiteTick : kiteTicks) {
+            ZonedDateTime tickTimestamp = ZonedDateTime.now(); // Default to arrival time
+            if (kiteTick.getTickTimestamp() != null) { // Kite SDK provides this
+                tickTimestamp = kiteTick.getTickTimestamp().toInstant().atZone(ZoneId.systemDefault());
+            } else if (kiteTick.getLastTradeTime() != null) { // Fallback
+                tickTimestamp = kiteTick.getLastTradeTime().toInstant().atZone(ZoneId.systemDefault());
+            }
+
+            String instrumentTokenStr = String.valueOf(kiteTick.getInstrumentToken());
+
+            MarketDepth ourMarketDepth = null;
+            if (kiteTick.getMarketDepth() != null && !kiteTick.getMarketDepth().isEmpty()){
+                ourMarketDepth = transformKiteDepthToOurDepth(instrumentTokenStr, tickTimestamp, kiteTick.getMarketDepth());
+            }
+
+            TickData tickData = new TickData(
+                    tickTimestamp,
+                    instrumentTokenStr,
+                    kiteTick.getLastTradedPrice(),
+                    kiteTick.getLastTradedQuantity(),
+                    kiteTick.getVolumeTradedToday(),
+                    kiteTick.getAverageTradePrice(),
+                    ourMarketDepth // Pass our transformed market depth
+            );
+            onTickCallback.accept(tickData);
+
+            // If a separate, more detailed depth callback is needed for full order book updates (not just top 5 with tick)
+            // and if `onDepthCallback` is set, one might call it here if `ourMarketDepth` is comprehensive enough
+            // or if a different subscription mode provides deeper depth updates.
+            // For modeFull, the depth in tick is usually the top 5.
+            if (ourMarketDepth != null && onDepthCallback != null) {
+                 // onDepthCallback.accept(ourMarketDepth); // If this callback expects MarketDepth object
+            }
+        }
+    }
+
+    private MarketDepth transformKiteDepthToOurDepth(String instrumentToken, ZonedDateTime timestamp, Map<String, ArrayList<Depth>> kiteDepthMap) {
+        List<MarketDepth.DepthLevel> bids = new ArrayList<>();
+        List<MarketDepth.DepthLevel> asks = new ArrayList<>();
+
+        if (kiteDepthMap != null) {
+            ArrayList<Depth> bidDepths = kiteDepthMap.getOrDefault("buy", new ArrayList<>());
+            for (Depth d : bidDepths) {
+                bids.add(new MarketDepth.DepthLevel(d.getPrice(), d.getQuantity(), d.getOrders()));
+            }
+            ArrayList<Depth> askDepths = kiteDepthMap.getOrDefault("sell", new ArrayList<>());
+            for (Depth d : askDepths) {
+                asks.add(new MarketDepth.DepthLevel(d.getPrice(), d.getQuantity(), d.getOrders()));
+            }
+        }
+        return new MarketDepth(instrumentToken, timestamp, bids, asks);
+    }
+
 
     // --- Callbacks for WebSocket events ---
-    public void setOnTickCallback(Consumer<TickData> callback) {
-        this.onTickCallback = callback;
+    public void setOnTickCallback(Consumer<TickData> callback) { this.onTickCallback = callback; }
+    public void setOnDepthCallback(Consumer<MarketDepth> callback) { this.onDepthCallback = callback; } // For dedicated depth updates
+    public void setOnConnectCallback(Runnable callback) { this.onWebSocketConnectCallback = callback; }
+    public void setOnDisconnectCallback(Runnable callback) { this.onWebSocketDisconnectCallback = callback; }
+    public void setOnErrorCallback(Consumer<String> callback) { this.onWebSocketErrorCallback = callback; } // Renamed for clarity
+    public void setOnKiteExceptionCallback(Consumer<KiteException> callback) { this.onKiteExceptionCallback = callback; }
+
+
+    // --- Order Management Methods ---
+    public String placeOrder(Map<String, Object> params, String variety) {
+        LoggingUtil.info("Placing order with params: " + params + ", variety: " + variety);
+        if (this.accessToken == null) {
+            LoggingUtil.error("Access token is null. Cannot place order.");
+            return null;
+        }
+        try {
+            OrderParams orderParams = new OrderParams();
+            orderParams.exchange = (String) params.get("exchange");
+            orderParams.tradingsymbol = (String) params.get("tradingsymbol"); // This must be the trading symbol (e.g. "INFY")
+            orderParams.transactionType = (String) params.get("transaction_type");
+            orderParams.quantity = (Integer) params.get("quantity");
+            orderParams.product = (String) params.get("product");
+            orderParams.orderType = (String) params.get("order_type");
+
+            if (params.containsKey("price")) orderParams.price = (Double) params.get("price");
+            if (params.containsKey("trigger_price")) orderParams.triggerPrice = (Double) params.get("trigger_price");
+            if (params.containsKey("validity")) orderParams.validity = (String) params.get("validity");
+            if (params.containsKey("tag")) orderParams.tag = (String) params.get("tag");
+            // Add other optional params as needed
+
+            Order order = kiteConnect.placeOrder(orderParams, variety);
+            LoggingUtil.info("Order placed successfully. Order ID: " + order.orderId + " for " + orderParams.tradingsymbol);
+            return order.orderId;
+        } catch (KiteException e) {
+            LoggingUtil.error("KiteException placing order for " + params.get("tradingsymbol") + ": " + e.getMessage() + " Code: " + e.code, e);
+            if (onKiteExceptionCallback != null) onKiteExceptionCallback.accept(e);
+        } catch (ClassCastException cce) {
+            LoggingUtil.error("ClassCastException parsing order params. Check data types. Params: " + params, cce);
+        }
+        catch (Exception e) {
+            LoggingUtil.error("Unexpected error placing order for " + params.get("tradingsymbol") + ": " + e.getMessage(), e);
+        }
+        return null;
     }
 
-    public void setOnDepthCallback(Consumer<MarketDepth> callback) {
-        this.onDepthCallback = callback;
-    }
-
-    public void setOnConnectCallback(Runnable callback) {
-        this.onConnectCallback = callback;
-    }
-
-    public void setOnDisconnectCallback(Runnable callback) {
-        this.onDisconnectCallback = callback;
-    }
-
-    public void setOnErrorCallback(Consumer<String> callback) {
-        this.onErrorCallback = callback;
-    }
-
-
-    // --- Order Management Methods (Placeholders) ---
-    // These methods would be called by OrderManager which holds more complex logic.
-    // Alternatively, OrderManager could use kiteConnect directly.
-
-    /**
-     * Places an order.
-     *
-     * @param orderParams Map containing order parameters (e.g., exchange, tradingsymbol, transaction_type, quantity, product, order_type, price, etc.)
-     * @return Order ID or null on failure.
-     */
-    public String placeOrder(Map<String, Object> orderParams) {
-        System.out.println("Placing order with params: " + orderParams + " (simulated).");
-        // TODO: Implement actual Kite Connect SDK call for placing order
-        // try {
-        //     com.zerodhatech.models.Order order = kiteConnect.placeOrder(createOrderParamsFromMap(orderParams), (String) orderParams.get("variety"));
-        //     return order.orderId;
-        // } catch (KiteException e) {
-        //     System.err.println("KiteException placing order: " + e.getMessage());
-        // } catch (Exception e) {
-        //     System.err.println("Unexpected error placing order: " + e.getMessage());
-        // }
-        return "simulated_order_id_" + System.currentTimeMillis();
-    }
-
-    // Helper to convert map to OrderParams object - SDK specific
-    // private com.zerodhatech.models.OrderParams createOrderParamsFromMap(Map<String, Object> params) {
-    //    com.zerodhatech.models.OrderParams orderParams = new com.zerodhatech.models.OrderParams();
-    //    orderParams.exchange = (String) params.get("exchange");
-    //    orderParams.tradingsymbol = (String) params.get("tradingsymbol");
-    //    // ... and so on for all required fields
-    //    return orderParams;
-    // }
-
-    public String modifyOrder(String orderId, Map<String, Object> orderParams) {
-        System.out.println("Modifying order " + orderId + " with params: " + orderParams + " (simulated).");
+    public String modifyOrder(String orderId, Map<String, Object> params, String variety) {
+        LoggingUtil.warning("modifyOrder is not fully implemented yet in KiteService.");
         // TODO: Implement actual Kite Connect SDK call
         return "simulated_modified_order_id_" + orderId;
     }
 
     public String cancelOrder(String orderId, String variety) {
-        System.out.println("Canceling order " + orderId + " variety " + variety + " (simulated).");
+        LoggingUtil.warning("cancelOrder is not fully implemented yet in KiteService.");
         // TODO: Implement actual Kite Connect SDK call
         return "simulated_cancelled_order_id_" + orderId;
     }
 
-    // --- Main method for testing KiteService (optional) ---
     public static void main(String[] args) {
-        // This is a placeholder for testing KiteService functionality independently.
-        // Replace with your actual API Key and User ID for testing.
-        KiteService kiteService = new KiteService("YOUR_API_KEY", "YOUR_USER_ID");
+        // Load credentials from environment or config for testing
+        String apiKey = System.getenv("KITE_API_KEY_TEST");
+        String userId = System.getenv("KITE_USER_ID_TEST");
+        String apiSecret = System.getenv("KITE_API_SECRET_TEST");
+        String requestTokenTest = System.getenv("KITE_REQUEST_TOKEN_TEST");
+        String accessTokenTest = System.getenv("KITE_ACCESS_TOKEN_TEST");
+        String publicTokenTest = System.getenv("KITE_PUBLIC_TOKEN_TEST");
 
-        // Simulate login flow (in a real app, this would be more complex)
-        // String loginUrl = kiteService.kiteConnect.getLoginURL();
-        // System.out.println("Login URL: " + loginUrl);
-        // After login, you get a request_token. For simulation:
-        String simulatedRequestToken = "simulated_request_token";
-        kiteService.generateSession(simulatedRequestToken); // This will internally call setAccessToken with a dummy
+        if (apiKey == null || userId == null) {
+            LoggingUtil.error("KITE_API_KEY_TEST and KITE_USER_ID_TEST environment variables must be set.");
+            return;
+        }
 
-        // Test historical data
-        List<Candle> candles = kiteService.getHistoricalData("256265", // Example: INFY token
-                LocalDate.now().minusDays(7),
+        KiteService kiteService = new KiteService(apiKey, userId);
+        kiteService.setOnKiteExceptionCallback(e ->
+            LoggingUtil.error("MainTest-KiteException: " + e.getMessage() + " Code: " + e.code)
+        );
+
+        if (accessTokenTest != null && publicTokenTest != null) {
+            LoggingUtil.info("Using existing access/public tokens for testing.");
+            kiteService.setTokens(accessTokenTest, publicTokenTest);
+        } else if (requestTokenTest != null && apiSecret != null) {
+            LoggingUtil.info("Attempting to generate session with request token...");
+            kiteService.generateSession(requestTokenTest, apiSecret);
+            if (kiteService.getAccessToken() != null) {
+                 LoggingUtil.info("Session generated. New Access Token: " + kiteService.getAccessToken() + ", New Public Token: " + kiteService.getPublicToken());
+                 LoggingUtil.info("Please save these tokens as environment variables KITE_ACCESS_TOKEN_TEST and KITE_PUBLIC_TOKEN_TEST for future runs.");
+            } else {
+                LoggingUtil.error("Failed to generate session even with request token and API secret.");
+                return;
+            }
+        } else {
+            LoggingUtil.error("Need either (KITE_ACCESS_TOKEN_TEST & KITE_PUBLIC_TOKEN_TEST) or (KITE_REQUEST_TOKEN_TEST & KITE_API_SECRET_TEST) to be set.");
+            LoggingUtil.info("To get a KITE_REQUEST_TOKEN_TEST, visit: " + kiteService.kiteConnect.getLoginURL() + " and complete login.");
+            return;
+        }
+
+        if(kiteService.getAccessToken() == null) {
+            LoggingUtil.error("Failed to obtain access token. Exiting test.");
+            return;
+        }
+
+        String testInstrumentToken = "256265"; // INFY NSE (numerical token)
+        LoggingUtil.info("Fetching historical data for " + testInstrumentToken);
+        List<Candle> candles = kiteService.getHistoricalData(testInstrumentToken,
+                LocalDate.now().minusDays(20), // Fetch more data to test pagination/limits if any
                 LocalDate.now().minusDays(1),
-                "day");
-        System.out.println("Fetched " + candles.size() + " candles (simulated).");
+                "minute"); // minute interval
+        LoggingUtil.info("Fetched " + candles.size() + " minute candles for " + testInstrumentToken);
+        if (!candles.isEmpty()) {
+            LoggingUtil.info("First fetched candle: " + candles.get(0));
+            LoggingUtil.info("Last fetched candle: " + candles.get(candles.size() - 1));
+        } else {
+            LoggingUtil.warning("No historical data fetched. Check API limits, token validity, or date range.");
+        }
 
-        // Test PDH
-        double pdh = kiteService.getPreviousDayHigh("256265", LocalDate.now().minusDays(1));
-        System.out.println("PDH for INFY: " + pdh + " (simulated).");
+        double pdc = kiteService.getPreviousDayClose(testInstrumentToken, LocalDate.now());
+        LoggingUtil.info("PDC for " + testInstrumentToken + " (relative to today): " + pdc);
 
-        // Simulate WebSocket connection
-        // LoggingUtil.info("Simulated Tick: " + tickData));
-        // kiteService.setOnConnectCallback(() -> LoggingUtil.info("Simulated WS Connected."));
-        // ArrayList<Long> tokens = new ArrayList<>();
-        // tokens.add(256265L); // INFY
-        // tokens.add(738561L); // RELIANCE
-        // kiteService.connectWebSocket(tokens);
-
-        // Simulate placing an order
+        // Test order placement (use with extreme caution)
         // Map<String, Object> orderParams = new HashMap<>();
-        // orderParams.put("tradingsymbol", "INFY"); // This should be the trading symbol, e.g. "INFY" for NSE
-        // orderParams.put("instrument_token", "256265"); // Some APIs might use instrument_token for orders too
+        // orderParams.put("tradingsymbol", "INFY");
         // orderParams.put("exchange", "NSE");
         // orderParams.put("transaction_type", "BUY");
         // orderParams.put("quantity", 1);
-        // orderParams.put("product", "CNC"); // CashNCarry for delivery
-        // orderParams.put("order_type", "LIMIT");
-        // orderParams.put("price", 1500.00);
-        // orderParams.put("variety", "regular");
-        // String orderId = kiteService.placeOrder(orderParams); // The placeOrder in KiteService currently takes a Map
-        // LoggingUtil.info("Placed order ID: " + orderId + " (simulated).");
-
-        // Allow time for WebSocket simulation if uncommented
-        // try {
-        //     Thread.sleep(10000); // Sleep for 10 seconds
-        // } catch (InterruptedException e) {
-        //     LoggingUtil.error("Sleep interrupted", e);
-        //     Thread.currentThread().interrupt();
+        // orderParams.put("product", "CNC");
+        // orderParams.put("order_type", "MARKET"); // Market order for testing simplicity if sure
+        // // orderParams.put("price", 1000.00); // For LIMIT order
+        // orderParams.put("tag", "KiteServiceMainTest");
+        // String orderId = kiteService.placeOrder(orderParams, "regular");
+        // if (orderId != null) {
+        //     LoggingUtil.info("Test order placed. Order ID: " + orderId);
+        // } else {
+        //     LoggingUtil.error("Test order placement failed.");
         // }
-        // kiteService.disconnectWebSocket();
     }
 }

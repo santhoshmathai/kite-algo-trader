@@ -136,7 +136,9 @@ public class KiteService {
     //     List<Candle> candles = new ArrayList<>();
     //     if (historicalData != null && historicalData.dataArrayList != null) {
     //         for (com.zerodhatech.models.HistoricalData.CandleData kd : historicalData.dataArrayList) {
-    //             ZonedDateTime zdt = ZonedDateTime.parse(kd.timeStamp); // Assuming ISO format like "2017-03-03T09:15:00+0530"
+    //             // Ensure timestamp parsing is robust. KiteConnect historical data usually provides Date objects.
+    //             // ZonedDateTime zdt = ZonedDateTime.parse(kd.timeStamp); // This was for string timestamps
+    //             ZonedDateTime zdt = kd.timeStamp.toInstant().atZone(ZoneId.systemDefault()); // If kd.timeStamp is java.util.Date
     //             candles.add(new Candle(zdt, instrumentToken, kd.open, kd.high, kd.low, kd.close, kd.volume));
     //         }
     //     }
@@ -145,21 +147,67 @@ public class KiteService {
 
     /**
      * Fetches the Previous Day High (PDH) for a given instrument.
-     * This might involve fetching the daily candle for the previous trading day.
      *
      * @param instrumentToken The instrument token.
-     * @param previousDate    The specific previous date to fetch the high for.
+     * @param targetDate      The date for which PDH is needed (it will fetch data for targetDate - 1 trading day).
      * @return The PDH value, or -1 if not found.
      */
-    public double getPreviousDayHigh(String instrumentToken, LocalDate previousDate) {
-        System.out.println("Fetching Previous Day High for " + instrumentToken + " on " + previousDate + " (simulated).");
-        // TODO: Implement logic to get PDH. This might involve fetching the daily candle for 'previousDate'.
-        // Example: Fetch daily candle for 'previousDate' and return its high.
-        // List<Candle> dailyCandle = getHistoricalData(instrumentToken, previousDate, previousDate, "day");
-        // if (!dailyCandle.isEmpty()) {
-        //     return dailyCandle.get(0).getHigh();
+    public double getPreviousDayHigh(String instrumentToken, LocalDate targetDate) {
+        LoggingUtil.info("Fetching Previous Day High for " + instrumentToken + " relative to " + targetDate);
+        // TODO: Determine the actual previous trading day, skipping weekends/holidays.
+        // For simplicity, this skeleton assumes targetDate.minusDays(1) is a trading day.
+        // A robust implementation needs a market holiday calendar.
+        LocalDate previousTradingDay = targetDate.minusDays(1); // Simplified: assumes previous day was a trading day
+        // In a real scenario, you'd loop backwards from targetDate-1 until a valid trading day is found.
+
+        // List<Candle> dailyCandles = getHistoricalData(instrumentToken, previousTradingDay, previousTradingDay, "day");
+        // if (dailyCandles != null && !dailyCandles.isEmpty()) {
+        //     LoggingUtil.debug("PDH for " + instrumentToken + " on " + previousTradingDay + " is " + dailyCandles.get(0).getHigh());
+        //     return dailyCandles.get(0).getHigh();
         // }
-        return -1.0; // Placeholder
+        // LoggingUtil.warning("Could not fetch PDH for " + instrumentToken + " on " + previousTradingDay);
+        return -1.0; // Placeholder for actual implementation
+    }
+
+    /**
+     * Fetches the Previous Day Close (PDC) for a given instrument.
+     *
+     * @param instrumentToken The instrument token (numerical, as String).
+     * @param targetDate      The date for which PDC is needed (it will fetch data for targetDate - 1 trading day).
+     * @return The PDC value, or -1.0 if not found or error.
+     */
+    public double getPreviousDayClose(String instrumentToken, LocalDate targetDate) {
+        LoggingUtil.info("Fetching Previous Day Close for " + instrumentToken + " relative to " + targetDate);
+        // TODO: Determine the actual previous trading day, skipping weekends/holidays.
+        // For simplicity, this skeleton assumes targetDate.minusDays(1) is a trading day.
+        LocalDate previousTradingDay = targetDate.minusDays(1); // Simplified
+
+        // try {
+        //     // KiteConnect historical data uses Date objects.
+        //     // From: Start of the previous trading day. To: End of the previous trading day.
+        //     Date from = Date.from(previousTradingDay.atStartOfDay(ZoneId.systemDefault()).toInstant());
+        //     Date to = Date.from(previousTradingDay.atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant());
+        //
+        //     // Assuming kiteConnect is initialized and session is valid.
+        //     // HistoricalData historicalData = this.kiteConnect.getHistoricalData(from, to, instrumentToken, "day", false, false);
+        //     //
+        //     // if (historicalData != null && historicalData.dataArrayList != null && !historicalData.dataArrayList.isEmpty()) {
+        //     //     com.zerodhatech.models.HistoricalData.CandleData dayCandle = historicalData.dataArrayList.get(0);
+        //     //     LoggingUtil.debug("PDC for " + instrumentToken + " on " + previousTradingDay + " is " + dayCandle.close);
+        //     //     return dayCandle.close;
+        //     // } else {
+        //     //     LoggingUtil.warning("No daily historical data found for " + instrumentToken + " for date " + previousTradingDay);
+        //     // }
+        // } catch (KiteException e) {
+        //     LoggingUtil.error("KiteException fetching PDC for " + instrumentToken + " on " + previousTradingDay + ": " + e.getMessage(), e);
+        // } catch (Exception e) {
+        //     LoggingUtil.error("Unexpected error fetching PDC for " + instrumentToken + " on " + previousTradingDay + ": " + e.getMessage(), e);
+        // }
+        // LoggingUtil.warning("Could not fetch PDC for " + instrumentToken + " on " + previousTradingDay);
+        // For skeleton, returning a dummy value:
+        if (instrumentToken.equals("260105")) return 48000.0; // Dummy PDC for NIFTYBANK
+        if (instrumentToken.equals("738561")) return 2900.0; // Dummy PDC for RELIANCE
+        return 100.0; // Default dummy
     }
 
 
@@ -405,8 +453,8 @@ public class KiteService {
         System.out.println("PDH for INFY: " + pdh + " (simulated).");
 
         // Simulate WebSocket connection
-        // kiteService.setOnTickCallback(tickData -> System.out.println("Simulated Tick: " + tickData));
-        // kiteService.setOnConnectCallback(() -> System.out.println("Simulated WS Connected."));
+        // LoggingUtil.info("Simulated Tick: " + tickData));
+        // kiteService.setOnConnectCallback(() -> LoggingUtil.info("Simulated WS Connected."));
         // ArrayList<Long> tokens = new ArrayList<>();
         // tokens.add(256265L); // INFY
         // tokens.add(738561L); // RELIANCE
@@ -414,22 +462,24 @@ public class KiteService {
 
         // Simulate placing an order
         // Map<String, Object> orderParams = new HashMap<>();
-        // orderParams.put("tradingsymbol", "INFY");
+        // orderParams.put("tradingsymbol", "INFY"); // This should be the trading symbol, e.g. "INFY" for NSE
+        // orderParams.put("instrument_token", "256265"); // Some APIs might use instrument_token for orders too
         // orderParams.put("exchange", "NSE");
         // orderParams.put("transaction_type", "BUY");
         // orderParams.put("quantity", 1);
-        // orderParams.put("product", "CNC");
+        // orderParams.put("product", "CNC"); // CashNCarry for delivery
         // orderParams.put("order_type", "LIMIT");
         // orderParams.put("price", 1500.00);
-        // orderParams.put("variety", "regular"); // or "amo", "bo", "co"
-        // String orderId = kiteService.placeOrder(orderParams);
-        // System.out.println("Placed order ID: " + orderId + " (simulated).");
+        // orderParams.put("variety", "regular");
+        // String orderId = kiteService.placeOrder(orderParams); // The placeOrder in KiteService currently takes a Map
+        // LoggingUtil.info("Placed order ID: " + orderId + " (simulated).");
 
         // Allow time for WebSocket simulation if uncommented
         // try {
         //     Thread.sleep(10000); // Sleep for 10 seconds
         // } catch (InterruptedException e) {
-        //     e.printStackTrace();
+        //     LoggingUtil.error("Sleep interrupted", e);
+        //     Thread.currentThread().interrupt();
         // }
         // kiteService.disconnectWebSocket();
     }

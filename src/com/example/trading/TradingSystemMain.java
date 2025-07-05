@@ -103,36 +103,44 @@ public class TradingSystemMain {
         LoggingUtil.info("Instruments from config: " + instrumentSymbolsFromConfig);
 
         for (String instrumentSymbol : instrumentSymbolsFromConfig) {
-            // TODO: Load strategy-specific parameters from config (e.g., ORB range, times, quantity)
-            // For simplicity, using hardcoded defaults here, but these should be configurable per instrument.
-            // Example: int orbRange = Integer.parseInt(config.getProperty("strategy.orb." + instrumentSymbol + ".rangeMinutes", "15"));
-            // String wsTokenStr = config.getProperty("strategy.orb." + instrumentSymbol + ".websocketToken");
-            // if (wsTokenStr == null) { LoggingUtil.warning("WebSocket token not found for " + instrumentSymbol); continue; }
-            // long websocketToken = Long.parseLong(wsTokenStr);
-
-            // This is a placeholder for mapping trading symbol to WebSocket numerical token.
+            // This is a placeholder for mapping trading symbol to WebSocket numerical token (instrument_token for Kite).
             // In a real system, you'd fetch this mapping from Kite's instrument list or have it configured.
-            long websocketToken; // Needs to be the numerical token for WebSocket subscription
+            String numericalTokenStr; // Kite's instrument token, usually numerical, as a String
             if (instrumentSymbol.equalsIgnoreCase("NIFTYBANK")) {
-                websocketToken = 260105L; // Nifty Bank Index
+                numericalTokenStr = "260105"; // Nifty Bank Index
             } else if (instrumentSymbol.equalsIgnoreCase("RELIANCE")) {
-                websocketToken = 738561L; // Reliance Industries
+                numericalTokenStr = "738561"; // Reliance Industries
             } else {
-                LoggingUtil.warning("No hardcoded WebSocket token for instrument: " + instrumentSymbol + ". Skipping strategy setup for it.");
+                LoggingUtil.warning("No hardcoded numerical (WebSocket) token for instrument symbol: " + instrumentSymbol + ". Skipping strategy setup for it.");
                 continue;
             }
 
+            // Fetch Previous Day Close (PDC) for gap analysis
+            double pdc = kiteService.getPreviousDayClose(numericalTokenStr, LocalDate.now());
+            if (pdc <= 0) {
+                LoggingUtil.warning("Could not fetch PDC for " + instrumentSymbol + " (token: " + numericalTokenStr + "). ORB strategy might not work correctly for it today.");
+                // Optionally, skip strategy setup if PDC is crucial and not available
+                // continue;
+            }
+
+            // TODO: Load strategy-specific parameters from config (e.g., ORB range, times, quantity)
+            // For simplicity, using hardcoded defaults here.
+            int orbOpeningRangeMinutes = 15; // As per requirement
+            LocalTime marketOpenTime = LocalTime.of(9, 15);
+            LocalTime strategyEndTime = LocalTime.of(15, 00); // When to stop initiating new ORB trades
 
             ORBStrategy strategy = new ORBStrategy(
                     timeSeriesManager,
                     orderManager,
-                    instrumentSymbol, // Trading symbol (e.g., "NIFTYBANK", "RELIANCE")
-                    15,               // Example: ORB minutes
-                    LocalTime.of(9, 15),
-                    LocalTime.of(15, 00)
+                    instrumentSymbol,      // The trading symbol (e.g., "NIFTYBANK") used for orders
+                    numericalTokenStr,     // The numerical instrument token (as String) used for data fetching & WebSocket
+                    pdc,                   // Previous Day's Close
+                    orbOpeningRangeMinutes,
+                    marketOpenTime,
+                    strategyEndTime
             );
             strategies.add(strategy);
-            LoggingUtil.info("ORB Strategy for " + instrumentSymbol + " (uses WebSocket token: " + websocketToken + ") initialized.");
+            LoggingUtil.info("ORB Strategy for " + instrumentSymbol + " (PDC: " + pdc + ", WebSocket Token: " + numericalTokenStr + ") initialized.");
         }
 
         // 4. Setup Callbacks for WebSocket and Start Connection
@@ -140,24 +148,26 @@ public class TradingSystemMain {
 
         // Instruments to subscribe to via WebSocket. Derived from configured strategies.
         ArrayList<Long> tokensToSubscribe = new ArrayList<>();
-        // This requires a mapping from instrumentSymbol (used in strategy config) to numerical token for WebSocket
-        // For now, using the hardcoded mapping from above.
-        for (String symbol : instrumentSymbolsFromConfig) {
-            if (symbol.equalsIgnoreCase("NIFTYBANK")) tokensToSubscribe.add(260105L);
-            else if (symbol.equalsIgnoreCase("RELIANCE")) tokensToSubscribe.add(738561L);
-            // else add other mappings or fetch dynamically
-        }
-        // Ensure no duplicates if multiple strategies use the same token
-        List<Long> distinctTokens = tokensToSubscribe.stream().distinct().collect(Collectors.toList());
+        // Instruments to subscribe to via WebSocket. Derived from configured strategies.
+        ArrayList<Long> tokensToSubscribe = strategies.stream()
+                .map(s -> {
+                    try {
+                        return Long.parseLong(s.getNumericalInstrumentToken()); // Assuming ORBStrategy has a getter for this
+                    } catch (NumberFormatException e) {
+                        LoggingUtil.error("Invalid numerical token format for strategy: " + s.getInstrumentSymbol() + " - " + s.getNumericalInstrumentToken(), e);
+                        return null;
+                    }
+                })
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toCollection(ArrayList::new));
 
-
-        LoggingUtil.info("Attempting to connect WebSocket for tokens: " + distinctTokens);
-        if (!distinctTokens.isEmpty()) {
-            kiteService.connectWebSocket(new ArrayList<>(distinctTokens)); // Initiates connection
+        LoggingUtil.info("Attempting to connect WebSocket for numerical tokens: " + tokensToSubscribe);
+        if (!tokensToSubscribe.isEmpty()) {
+            kiteService.connectWebSocket(tokensToSubscribe); // Initiates connection
         } else {
-            LoggingUtil.warning("No instruments configured for WebSocket subscription. WebSocket will not connect.");
+            LoggingUtil.warning("No valid numerical tokens for WebSocket subscription derived from strategies. WebSocket will not connect.");
         }
-
 
         // 5. Main Application Loop & Shutdown Handling
         LoggingUtil.info("System is running. Waiting for market data and events...");
@@ -206,17 +216,9 @@ public class TradingSystemMain {
         kiteService.setOnTickCallback((TickData tick) -> {
             timeSeriesManager.addTick(tick);
             for (ORBStrategy strategy : strategies) {
-                // TickData.instrumentToken is assumed to be the numerical token as String.
-                // ORBStrategy.instrumentToken is the trading symbol (e.g. "NIFTYBANK").
-                // This requires a mapping. For now, we'll assume strategy.evaluate() handles this or
-                // the tokens are aligned during strategy setup.
-                // A practical approach: strategies subscribe to numerical tokens, and TickData carries that.
-                // The ORBStrategy would need to be initialized with or map its trading symbol to the numerical token.
-                // For this skeleton, let's assume TickData.getInstrumentToken() returns a string that can be matched
-                // by strategy.getInstrumentToken() if they are configured consistently.
-                // This part needs careful implementation for a real system.
-                // Example: if (strategy.getWebSocketToken().equals(tick.getInstrumentToken()))
-                if (strategy.getInstrumentToken().equals(mapNumericalTokenToSymbol(tick.getInstrumentToken()))) {
+                // TickData.instrumentToken is the numerical token (as String).
+                // ORBStrategy should be checked against this numerical token.
+                if (strategy.getNumericalInstrumentToken().equals(tick.getInstrumentToken())) {
                      strategy.evaluate();
                 }
             }
@@ -238,15 +240,7 @@ public class TradingSystemMain {
         // TODO: Setup callback for order updates from KiteService to OrderManager
     }
 
-    // Placeholder for mapping numerical token (as string) from tick to trading symbol
-    // This should be replaced with a robust lookup mechanism (e.g., from a preloaded instrument list)
-    private static String mapNumericalTokenToSymbol(String numericalToken) {
-        if ("260105".equals(numericalToken)) return "NIFTYBANK";
-        if ("738561".equals(numericalToken)) return "RELIANCE";
-        // Add more mappings or use a proper lookup
-        return numericalToken; // Fallback, likely won't match
-    }
-
+    // Removed mapNumericalTokenToSymbol as strategy now holds numerical token.
 
     private static synchronized void shutdown() {
         if (!isRunning) {

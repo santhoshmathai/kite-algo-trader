@@ -1,0 +1,116 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example.trading</groupId>
+    <artifactId>intraday-trading-system-zerodha</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Intraday Trading System - Zerodha</name>
+    <description>A Java-based intraday trading system using Zerodha Kite Connect.</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <java.version>11</java.version>
+    </properties>
+
+    <dependencies>
+        <!-- Zerodha Kite Connect SDK -->
+        <dependency>
+            <groupId>com.my.zerodhatech.kiteconnect</groupId>
+            <artifactId>mykiteconnect</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
+        <!-- Add other dependencies here if needed in the future -->
+        <!-- For example, if you decide to use a more advanced logging framework like Logback or Log4j2
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.2.11</version>
+        </dependency>
+        -->
+    </dependencies>
+
+    <build>
+        <sourceDirectory>src</sourceDirectory> <!-- Adjusted to current project structure -->
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.2.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <addClasspath>true</addClasspath>
+                            <mainClass>com.example.trading.TradingSystemMain</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+            <!-- Optional: Maven Surefire Plugin for running tests -->
+            <!--
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.22.2</version>
+            </plugin>
+            -->
+            <!-- Optional: Maven Assembly Plugin for creating an executable JAR with dependencies -->
+            <!--
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.3.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.example.trading.TradingSystemMain</mainClass>
+                                </manifest>
+                            </archive>
+                            <descriptorRefs>
+                                <descriptorRef>jar-with-dependencies</descriptorRef>
+                            </descriptorRefs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            -->
+        </plugins>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory> <!-- Standard Maven resources directory -->
+            </resource>
+        </resources>
+    </build>
+
+    <!-- If the Zerodha SDK is not on Maven Central, you might need to configure a repository -->
+    <!--
+    <repositories>
+        <repository>
+            <id>my-zerodha-repo</id>
+            <url>URL_TO_YOUR_ZERODHA_MAVEN_REPO_IF_ANY</url>
+        </repository>
+    </repositories>
+    -->
+
+</project>

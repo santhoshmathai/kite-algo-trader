@@ -42,31 +42,27 @@ public class TimeSeriesManager {
         if (tick == null) return;
 
         String instrumentToken = tick.getInstrumentToken();
-        oneMinSeries.computeIfAbsent(instrumentToken, k -> new ArrayDeque<>())
-                    .compute(instrumentToken, (key, series) -> {
-                        if (series == null) series = new ArrayDeque<>();
+        Deque<Candle> series = oneMinSeries.computeIfAbsent(instrumentToken, k -> new ArrayDeque<>());
 
-                        ZonedDateTime tickTime = tick.getTimestamp();
-                        double price = tick.getLastTradedPrice();
-                        long volume = tick.getLastTradedVolume();
+        ZonedDateTime tickTime = tick.getTimestamp();
+        double price = tick.getLastTradedPrice();
+        long volume = tick.getLastTradedVolume();
 
-                        if (series.isEmpty() || isNewCandlePeriod(series.getLast().getTimestamp(), tickTime, 1)) {
-                            // Create a new 1-minute candle
-                            ZonedDateTime candleStartTime = tickTime.truncatedTo(ChronoUnit.MINUTES);
-                            Candle newCandle = new Candle(candleStartTime, instrumentToken, price, price, price, price, volume);
-                            series.addLast(newCandle);
-                            // System.out.println("New 1-min candle for " + instrumentToken + ": " + newCandle);
-                        } else {
-                            // Update the current 1-minute candle
-                            Candle currentCandle = series.getLast();
-                            currentCandle.update(price, volume);
-                            // System.out.println("Updated 1-min candle for " + instrumentToken + ": " + currentCandle);
-                        }
+        if (series.isEmpty() || isNewCandlePeriod(series.getLast().getTimestamp(), tickTime, 1)) {
+            // Create a new 1-minute candle
+            ZonedDateTime candleStartTime = tickTime.truncatedTo(ChronoUnit.MINUTES);
+            Candle newCandle = new Candle(candleStartTime, instrumentToken, price, price, price, price, volume);
+            series.addLast(newCandle);
+            // System.out.println("New 1-min candle for " + instrumentToken + ": " + newCandle);
+        } else {
+            // Update the current 1-minute candle
+            Candle currentCandle = series.getLast();
+            currentCandle.update(price, volume);
+            // System.out.println("Updated 1-min candle for " + instrumentToken + ": " + currentCandle);
+        }
 
-                        // Trim old candles if series is too long
-                        trimOldCandles(series);
-                        return series;
-                    });
+        // Trim old candles if series is too long
+        trimOldCandles(series);
 
         // After updating 1-min series, check for aggregation to higher timeframes
         aggregateToHigherTimeFrames(instrumentToken);

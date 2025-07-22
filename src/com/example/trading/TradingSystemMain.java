@@ -5,6 +5,7 @@ import com.example.trading.data.TimeSeriesManager;
 import com.example.trading.indicators.IndicatorCalculator;
 import com.example.trading.order.OrderManager;
 import com.example.trading.risk.RiskManager;
+import com.example.trading.risk.RiskManagerThread;
 import com.example.trading.strategy.ORBStrategy;
 import com.example.trading.util.Config; // Import Config
 import com.example.trading.util.LoggingUtil; // Import LoggingUtil
@@ -30,6 +31,7 @@ public class TradingSystemMain {
     private static IndicatorCalculator indicatorCalculator; // May not need an instance if all methods are static
     private static OrderManager orderManager;
     private static RiskManager riskManager;
+    private static RiskManagerThread riskManagerThread;
     private static List<ORBStrategy> strategies; // Example: List of strategies
     private static volatile boolean isRunning = true;
 
@@ -114,6 +116,8 @@ public class TradingSystemMain {
         setupKiteServiceCallbacks();
 
         // 5. Main Application Loop & Shutdown Handling
+        riskManagerThread = new RiskManagerThread(riskManager);
+        riskManagerThread.start();
         LoggingUtil.info("System is running. Waiting for market data and events...");
         LoggingUtil.info("Type 'exit' and press Enter in the console to shutdown gracefully.");
 
@@ -168,6 +172,10 @@ public class TradingSystemMain {
         }
         LoggingUtil.info("Initiating shutdown sequence...");
         isRunning = false;
+
+        if (riskManagerThread != null) {
+            riskManagerThread.stopThread();
+        }
 
         LoggingUtil.info("System shutdown actions complete. Exiting.");
     }

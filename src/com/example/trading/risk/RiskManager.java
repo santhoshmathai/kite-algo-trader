@@ -35,8 +35,6 @@ public class RiskManager {
             return;
         }
 
-        checkDrawdown();
-
         OrderManager.PositionDetails position = orderManager.getPosition(instrumentToken);
         if (position == null) {
             return;
@@ -81,7 +79,7 @@ public class RiskManager {
         return params;
     }
 
-    private void checkDrawdown() {
+    public void checkDrawdown() {
         double currentPortfolioValue = calculateCurrentPortfolioValue();
         if (peakPortfolioValue < 0) {
             peakPortfolioValue = currentPortfolioValue;

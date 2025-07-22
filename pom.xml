@@ -20,11 +20,13 @@
 
     <dependencies>
         <!-- Zerodha Kite Connect SDK -->
+        <!--
         <dependency>
             <groupId>com.my.zerodhatech.kiteconnect</groupId>
             <artifactId>mykiteconnect</artifactId>
             <version>1.0.0</version>
         </dependency>
+        -->
 
         <!-- Add other dependencies here if needed in the future -->
         <!-- For example, if you decide to use a more advanced logging framework like Logback or Log4j2
@@ -34,6 +36,30 @@
             <version>1.2.11</version>
         </dependency>
         -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.8.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>4.5.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>5.8.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>4.5.1</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -46,6 +72,8 @@
                 <configuration>
                     <source>${java.version}</source>
                     <target>${java.version}</target>
+                    <testSource>${java.version}</testSource>
+                    <testTarget>${java.version}</testTarget>
                 </configuration>
             </plugin>
             <plugin>
@@ -61,14 +89,18 @@
                     </archive>
                 </configuration>
             </plugin>
-            <!-- Optional: Maven Surefire Plugin for running tests -->
-            <!--
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>2.22.2</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.junit.platform</groupId>
+                        <artifactId>junit-platform-surefire-provider</artifactId>
+                        <version>1.2.0</version>
+                    </dependency>
+                </dependencies>
             </plugin>
-            -->
             <!-- Optional: Maven Assembly Plugin for creating an executable JAR with dependencies -->
             <!--
             <plugin>

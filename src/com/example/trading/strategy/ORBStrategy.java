@@ -4,6 +4,7 @@ import com.example.trading.core.Candle;
 import com.example.trading.data.TimeSeriesManager;
 import com.example.trading.indicators.IndicatorCalculator; // For volume spike detection
 import com.example.trading.order.OrderManager;
+import com.example.trading.risk.RiskManager;
 import com.example.trading.util.LoggingUtil;
 
 import java.time.LocalTime;
@@ -27,6 +28,7 @@ public class ORBStrategy {
 
     private final TimeSeriesManager timeSeriesManager;
     private final OrderManager orderManager;
+    private final RiskManager riskManager;
     private final String instrumentSymbol; // Trading symbol, e.g., "NIFTYBANK"
     private final String numericalInstrumentToken; // Numerical token for data, e.g., "260105"
     private final double previousDayClose;
@@ -64,11 +66,12 @@ public class ORBStrategy {
     private long currentTotalDayVolume = 0;
 
 
-    public ORBStrategy(TimeSeriesManager timeSeriesManager, OrderManager orderManager,
+    public ORBStrategy(TimeSeriesManager timeSeriesManager, OrderManager orderManager, RiskManager riskManager,
                        String instrumentSymbol, String numericalInstrumentToken, double previousDayClose,
                        int openingRangeDurationMinutes, LocalTime marketOpenTime, LocalTime strategyEndTime) {
         this.timeSeriesManager = timeSeriesManager;
         this.orderManager = orderManager;
+        this.riskManager = riskManager;
         this.instrumentSymbol = instrumentSymbol;
         this.numericalInstrumentToken = numericalInstrumentToken;
         this.previousDayClose = previousDayClose;
@@ -334,6 +337,12 @@ public class ORBStrategy {
                     priceAtSignal = lastCandle.getClose();
                     lowAfterLongSignal = lastCandle.getLow(); // Initialize tracking
                     conditionMetTime = lastCandle.getTimestamp().toLocalTime();
+
+                    // Set stop-loss and take-profit
+                    double stopLoss = priceAtSignal * 0.99; // 1% stop-loss
+                    double takeProfit = priceAtSignal * 1.02; // 2% take-profit
+                    riskManager.setStopLoss(numericalInstrumentToken, stopLoss);
+                    riskManager.setTakeProfit(numericalInstrumentToken, takeProfit);
                 } else {
                     LoggingUtil.error(String.format("ORB (%s): Failed to place buy order.", instrumentSymbol));
                 }
@@ -361,6 +370,12 @@ public class ORBStrategy {
                     priceAtSignal = lastCandle.getClose();
                     highAfterShortSignal = lastCandle.getHigh(); // Initialize tracking
                     conditionMetTime = lastCandle.getTimestamp().toLocalTime();
+
+                    // Set stop-loss and take-profit
+                    double stopLoss = priceAtSignal * 1.01; // 1% stop-loss
+                    double takeProfit = priceAtSignal * 0.98; // 2% take-profit
+                    riskManager.setStopLoss(numericalInstrumentToken, stopLoss);
+                    riskManager.setTakeProfit(numericalInstrumentToken, takeProfit);
                 } else {
                     LoggingUtil.error(String.format("ORB (%s): Failed to place sell order.", instrumentSymbol));
                 }

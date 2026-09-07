@@ -1,6 +1,6 @@
 # Architecture plan: one application, multiple markets
 
-Status: proposed implementation design, 2026-09-07. This document does not claim these components already exist. The current runnable build remains the offline foundation described in README.md.
+Status: architectural direction, updated 2026-09-07. The India MVP now implements a compact subset: `TradingEngine` coordinates risk and execution; `Broker` has Kite and simulated adapters; `Journal` persists state; `Backtest` and `TradingRuntime` share signals and coordination. The more granular packages/interfaces below are future extraction targets, not claims that every abstraction exists. See README.md and docs/OPERATIONS.md for the actual runnable commands.
 
 ## Decision
 
@@ -8,7 +8,7 @@ Use a **modular monolith**: one Java codebase, one build, one executable JAR and
 
 The expected workload is a small equity universe, at most 10-20 shortlisted instruments, minute-based signals and a small number of positions. This does not justify distributed infrastructure. Measure feed lag, queue depth and memory before buying more computing capacity.
 
-When adding US trading, reuse the sam9e application with another market profile and a broker adapter. Initially run a separate instance of that same JAR for each account/market, with its own state directory and capital allocation. This isolates failures, authentication and trading sessions without creating different applications. Do not run multiple writers against the same account: enforce an exclusive account lock, and reconcile any externally placed orders.
+When adding US trading, reuse the same application with another market profile and a broker adapter. Initially run a separate instance of that same JAR for each account/market, with its own state directory and capital allocation. This isolates failures, authentication and trading sessions without creating different applications. Do not run multiple writers against the same account: enforce an exclusive account lock, and reconcile any externally placed orders.
 
 No web framework, message broker, Kubernetes, Redis or hosted database is required. Do not create a Maven multi-module project yet. Separate build modules only if compile-time boundaries become difficult to maintain or components develop genuinely different release cycles.
 
@@ -215,3 +215,9 @@ Migrate incrementally. Do not copy the India engine into a US folder. Do not con
 Consider extracting historical research first if backtests interfere with live latency: a separate process running the same application is often enough. Introduce independently deployed services only for measured requirements such as multiple concurrent account teams, a large continuously recorded universe, independent uptime/release needs, or an actual remote multi-user product.
 
 Profit by itself is not a reason to add infrastructure. Operational requirements and measured bottlenecks should drive that decision.
+
+## India implementation and later markets
+
+The MVP deliberately retains India-specific equity identity, currency assumptions, session times and MIS order translation. The Broker boundary keeps SDK types out of the engine. Before adding the US, extract session policy, currency-aware cash accounting, order capabilities and listing metadata from these India classes; supply a US calendar and broker adapter, and rerun the lifecycle tests. Do not reuse NSE fee, shorting or session assumptions for US execution. Options also need a separate contract catalog, expiry/lot-size rules, liquidity selection and options-specific sizing before enabling any derivatives orders.
+
+Daily sector ranking remains a research feature. The first version accepts an explicit watchlist so its selection can be timestamped and audited; an eventual ranker must use only information available before each decision and be evaluated out of sample against this baseline.

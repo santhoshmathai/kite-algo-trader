@@ -1,67 +1,59 @@
 package com.example.trading;
 
-import com.example.trading.core.*;
-import com.example.trading.data.TimeSeriesManager;
-import com.example.trading.order.OrderManager;
-import com.example.trading.risk.*;
-import com.example.trading.strategy.ORBStrategy;
-import com.example.trading.util.Config;
+import com.example.trading.app.*;
+import com.example.trading.broker.*;
+import com.example.trading.core.Candle;
+import com.example.trading.replay.Backtest;
+import java.nio.file.*;
 import java.time.*;
 import java.util.*;
 
-/** Explicitly offline, deterministic demonstration of the first milestone. */
+/** Local command line application. Network access and execution are explicit commands. */
 public final class TradingSystemMain {
     public static void main(String[] args) {
-        if (args.length != 1 || !"--demo".equals(args[0])) {
-            System.out.println("Kite Algo Trader - offline foundation\nUsage: java -jar kite-algo-trader.jar --demo");
-            System.out.println("Live execution and historical performance backtesting are not enabled.");
-            if (args.length > 0 && !"--help".equals(args[0])) System.exit(2);
-            return;
+        TimeZone.setDefault(TimeZone.getTimeZone(SessionCalendar.ZONE));
+        try { execute(args); }
+        catch(Exception e) {
+            // SDK transport errors may contain credential-bearing URLs: do not dump exception messages or stacks.
+            System.err.println("Command failed ("+e.getClass().getSimpleName()+"). Check command arguments, configuration, data and daily session. No automatic command retry.");
+            System.exit(2);
         }
-        Config config = new Config();
-        double capital = Double.parseDouble(config.getProperty("risk.capital", "100000"));
-        double tradeRisk = Double.parseDouble(config.getProperty("risk.perTrade", "250"));
-        double dailyLoss = Double.parseDouble(config.getProperty("risk.dailyLoss", "1000"));
-        double maximumNotional = Double.parseDouble(config.getProperty("risk.maximumNotional", "25000"));
-        double buffer = Double.parseDouble(config.getProperty("strategy.breakoutBuffer", "0.05"));
-        double reward = Double.parseDouble(config.getProperty("strategy.rewardMultiple", "1.5"));
-        if (!Double.isFinite(reward) || reward <= 0) throw new IllegalArgumentException("Invalid reward multiple");
-        TradingSession session = new TradingSession();
-        Instrument instrument = new Instrument("DEMO-1", "NSE", "DEMO_EQUITY", true);
-        InstrumentRegistry registry = new InstrumentRegistry(); registry.register(instrument);
-        TimeSeriesManager data = new TimeSeriesManager(session);
-        OrderManager orders = new OrderManager(registry);
-        RiskManager risk = new RiskManager(orders, capital, dailyLoss);
-        ORBStrategy strategy = new ORBStrategy(instrument, session, 15, LocalTime.of(10, 0), buffer, false);
-        ZonedDateTime start = ZonedDateTime.of(2026, 9, 7, 9, 15, 0, 0, TradingSession.ZONE);
-        System.out.println("SYNTHETIC DEMO ONLY - no network, credentials, or real orders; P&L excludes fees.");
-        for (int minute = 0; minute < 15; minute++) {
-            Candle bar = new Candle(start.plusMinutes(minute), instrument.token, 100, 101, 99, 100, 1000);
-            data.addClosedCandle(bar);
-            strategy.onClosedCandle(bar, bar.getTimestamp().plusMinutes(1));
-        }
-        System.out.println("Opening range: " + data.getFifteenMinSeries(instrument.token).getLast());
-        Candle breakout = new Candle(start.plusMinutes(15), instrument.token, 100, 102, 100, 102, 2000);
-        data.addClosedCandle(breakout);
-        ORBStrategy.Signal signal = strategy.onClosedCandle(breakout, start.plusMinutes(16)).orElseThrow();
-        // A separately specified next observation supplies the fill: never the signal bar itself.
-        double fill = 102.10;
-        int qty = PositionSizer.quantity(fill, signal.stopPrice, tradeRisk, capital, maximumNotional, 1000, 0);
-        if (qty == 0) { System.out.println("Sizing rejected this synthetic trade."); return; }
-        String entryId = orders.placeOrder(Map.of("exchange", instrument.exchange, "tradingsymbol", instrument.symbol,
-                "transaction_type", signal.side, "quantity", qty, "product", "MIS", "order_type", "LIMIT", "price", fill), "regular");
-        orders.updateOrderStatus(entryId, "COMPLETE", qty, fill);
-        double target = fill + reward * (fill - signal.stopPrice);
-        risk.setStopLoss(instrument.token, signal.stopPrice);
-        risk.setTakeProfit(instrument.token, target);
-        System.out.printf(Locale.ROOT, "09:31 simulated BUY %d at %.2f; stop %.2f; target %.2f%n", qty, fill, signal.stopPrice, target);
-        risk.checkPositions(instrument.token, target);
-        OrderManager.OrderDetails exit = orders.getAllActiveOrders().get(0);
-        orders.updateOrderStatus(exit.orderId, "COMPLETE", qty, target);
-        risk.checkPositions(instrument.token, target);
-        risk.checkDrawdown();
-        System.out.printf(Locale.ROOT, "Simulated exit confirmed; gross P&L %.2f; open positions %d%n",
-                orders.getTotalPnl(), orders.getAllOpenPositions().size());
-        System.out.println("This fixture verifies the plumbing; it provides no evidence of a trading edge.");
     }
+    public static void execute(String[] args)throws Exception {
+        if(args.length==0||args[0].equals("--help")){help();return;}
+        String command=args[0];
+        if(command.equals("--demo")){require(args,1);FoundationDemo.main(args);return;}
+        if(command.equals("login-url")){require(args,1);System.out.println(KiteBroker.loginUrl());return;}
+        if(command.equals("status")){require(args,2);System.out.print(Files.readString(Path.of(args[1]).resolve("status.txt")));return;}
+        if(command.equals("stop")){require(args,2);Path account=Path.of(args[1]);if(!Files.exists(account.resolve("account.lock")))throw new IllegalArgumentException("Not a session account directory");Files.writeString(account.resolve("STOP"),"Operator stop requested\n");System.out.println("Stop requested. Wait for confirmed flat status and verify Kite positions.");return;}
+        if(args.length<2)throw new IllegalArgumentException("Configuration path required");
+        Settings cfg=new Settings(Path.of(args[1]));
+        switch(command){
+            case "login":require(args,2);KiteBroker.login(cfg);break;
+            case "instruments":require(args,2);try(KiteBroker kite=new KiteBroker(cfg,Map.of(),false)){kite.downloadInstruments(cfg);}System.out.println("Instrument mappings saved.");break;
+            case "validate":require(args,2);Map<String,Equity> a=Equity.read(cfg.path("instruments"),cfg.symbols);new SessionCalendar(cfg.path("calendar"));new Fees(cfg.path("fees"));System.out.println("Configuration and "+a.size()+" equity mappings valid. Live enabled: "+cfg.liveEnabled);break;
+            case "backtest":require(args,4);System.out.println("Report: "+Backtest.run(cfg,Path.of(args[2]),Path.of(args[3])));break;
+            case "paper":require(args,2);TradingRuntime.run(cfg,false,false);break;
+            case "live":require(args,3);if(!args[2].equals("--arm-live"))throw new IllegalArgumentException("Explicit live arm required");TradingRuntime.run(cfg,true,true);break;
+            case "download":require(args,5);download(cfg,LocalDate.parse(args[2]),LocalDate.parse(args[3]),Path.of(args[4]));break;
+            default:throw new IllegalArgumentException("Unknown command");
+        }
+    }
+    private static void download(Settings cfg,LocalDate from,LocalDate to,Path output)throws Exception{
+        if(to.isBefore(from)||to.isAfter(LocalDate.now(SessionCalendar.ZONE))||from.plusYears(5).isBefore(to))throw new IllegalArgumentException("Invalid date range");
+        Map<String,Equity> assets=Equity.read(cfg.path("instruments"),cfg.symbols);List<Candle> bars=new ArrayList<>();
+        try(KiteBroker kite=new KiteBroker(cfg,assets,false)){for(Equity e:assets.values())bars.addAll(kite.history(e,from,to));}
+        bars.sort(Comparator.comparing(Candle::getTimestamp).thenComparing(Candle::getInstrumentToken));
+        List<String> lines=new ArrayList<>();lines.add("timestamp,instrument,open,high,low,close,volume");
+        for(Candle c:bars)lines.add(c.getTimestamp().toOffsetDateTime()+","+c.getInstrumentToken()+","+c.getOpen()+","+c.getHigh()+","+c.getLow()+","+c.getClose()+","+c.getVolume());
+        Files.createDirectories(output.toAbsolutePath().getParent());Files.write(output,lines,StandardOpenOption.CREATE_NEW);System.out.println("Saved "+bars.size()+" bars. Validate calendar and historical fee coverage before replay.");
+    }
+    private static void require(String[] args,int n){if(args.length!=n)throw new IllegalArgumentException("Wrong argument count; see --help");}
+    private static void help(){System.out.println("Kite Algo Trader | India NSE equities | local standalone application\n"
+        +"java -jar build/kite-algo-trader.jar <command>\n"
+        +"  --demo | --help\n  validate <config>\n  login-url\n  login <config>\n  instruments <config>\n"
+        +"  download <config> <from YYYY-MM-DD> <to YYYY-MM-DD> <new bars.csv>\n"
+        +"  backtest <config> <bars.csv> <output directory>\n  paper <config>\n  live <config> --arm-live\n"
+        +"  status <day output directory>\n  stop <account output directory>\n"
+        +"Live is disabled by default. See docs/OPERATIONS.md for login, static IP, recovery and data requirements.");}
 }

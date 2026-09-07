@@ -19,23 +19,14 @@
     </properties>
 
     <dependencies>
-        <!-- Zerodha Kite Connect SDK -->
-        <!--
+        <!-- Official SDK distribution pinned in lib; includes its upstream runtime dependencies. -->
         <dependency>
-            <groupId>com.my.zerodhatech.kiteconnect</groupId>
-            <artifactId>mykiteconnect</artifactId>
-            <version>1.0.0</version>
+            <groupId>com.zerodhatech</groupId>
+            <artifactId>kiteconnect-bundled</artifactId>
+            <version>4.0.1</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/kiteconnect.jar</systemPath>
         </dependency>
-        -->
-
-        <!-- Add other dependencies here if needed in the future -->
-        <!-- For example, if you decide to use a more advanced logging framework like Logback or Log4j2
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>1.2.11</version>
-        </dependency>
-        -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
@@ -84,9 +75,9 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <addClasspath>true</addClasspath>
+                            <addClasspath>false</addClasspath>
                             <mainClass>com.example.trading.TradingSystemMain</mainClass>
-                        </manifest>
+                        </manifest><manifestEntries><Class-Path>../lib/kiteconnect.jar</Class-Path></manifestEntries>
                     </archive>
                 </configuration>
             </plugin>
@@ -111,7 +102,7 @@
                             <archive>
                                 <manifest>
                                     <mainClass>com.example.trading.TradingSystemMain</mainClass>
-                                </manifest>
+                                </manifest><manifestEntries><Class-Path>../lib/kiteconnect.jar</Class-Path></manifestEntries>
                             </archive>
                             <descriptorRefs>
                                 <descriptorRef>jar-with-dependencies</descriptorRef>

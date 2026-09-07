@@ -91,11 +91,11 @@ public class MarketDepth {
     }
 
     public List<DepthLevel> getBids() {
-        return bids; // Returns an unmodifiable list if original was, or a new list from stream
+        return List.copyOf(bids);
     }
 
     public List<DepthLevel> getAsks() {
-        return asks; // Returns an unmodifiable list if original was, or a new list from stream
+        return List.copyOf(asks);
     }
 
     public double getBestBidPrice() {

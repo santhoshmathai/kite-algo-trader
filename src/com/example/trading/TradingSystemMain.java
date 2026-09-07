@@ -1,182 +1,67 @@
 package com.example.trading;
 
-import com.example.trading.core.TickData;
+import com.example.trading.core.*;
 import com.example.trading.data.TimeSeriesManager;
-import com.example.trading.indicators.IndicatorCalculator;
 import com.example.trading.order.OrderManager;
-import com.example.trading.risk.RiskManager;
-import com.example.trading.risk.RiskManagerThread;
+import com.example.trading.risk.*;
 import com.example.trading.strategy.ORBStrategy;
-import com.example.trading.util.Config; // Import Config
-import com.example.trading.util.LoggingUtil; // Import LoggingUtil
+import com.example.trading.util.Config;
+import java.time.*;
+import java.util.*;
 
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-import java.util.stream.Collectors;
-
-/**
- * Main class for the Intraday Trading System.
- * This class will initialize and coordinate all other components.
- */
-public class TradingSystemMain {
-
-    // Declare components
-    private static Config config; // Config instance
-    // private static LoggingUtil logger; // LoggingUtil methods are static
-    private static Object kiteService;
-    private static TimeSeriesManager timeSeriesManager;
-    private static IndicatorCalculator indicatorCalculator; // May not need an instance if all methods are static
-    private static OrderManager orderManager;
-    private static RiskManager riskManager;
-    private static RiskManagerThread riskManagerThread;
-    private static List<ORBStrategy> strategies; // Example: List of strategies
-    private static volatile boolean isRunning = true;
-
-
+/** Explicitly offline, deterministic demonstration of the first milestone. */
+public final class TradingSystemMain {
     public static void main(String[] args) {
-        // 1. Initialize Configuration and Logging
-        config = new Config(); // Loads from config.properties
-        LoggingUtil.setLevel(config.getLogLevel()); // Set log level from config
-        LoggingUtil.info("Intraday Trading System Starting...");
-        LoggingUtil.info("TradingSystemMain: Initializing components...");
-
-        // --- Load Core Credentials from Config ---
-        String apiKey = config.getApiKey();
-        String userId = config.getUserId();
-        String apiSecret = config.getApiSecret(); // Needed for generating session
-        String existingAccessToken = config.getAccessToken();
-
-        Scanner scanner = new Scanner(System.in); // For interactive input if credentials missing
-
-        if (apiKey == null || apiKey.trim().isEmpty() || apiKey.equals("YOUR_API_KEY_HERE")) {
-            LoggingUtil.warning("API Key not found in config.properties or is default.");
-            System.out.print("Enter Kite API Key: ");
-            apiKey = scanner.nextLine();
-        }
-        if (userId == null || userId.trim().isEmpty() || userId.equals("YOUR_USER_ID_HERE")) {
-            LoggingUtil.warning("User ID not found in config.properties or is default.");
-            System.out.print("Enter Kite User ID: ");
-            userId = scanner.nextLine();
-        }
-
-        // 2. Initialize Core Services
-        kiteService = new Object(); // Mock KiteService
-
-        timeSeriesManager = new TimeSeriesManager();
-        orderManager = new OrderManager(kiteService);
-        riskManager = new RiskManager(orderManager);
-        indicatorCalculator = new IndicatorCalculator();
-
-        // 3. Initialize Strategies based on Config
-        strategies = new ArrayList<>();
-        List<String> instrumentSymbolsFromConfig = config.getStrategyInstruments();
-        LoggingUtil.info("Instruments from config: " + instrumentSymbolsFromConfig);
-
-        for (String instrumentSymbol : instrumentSymbolsFromConfig) {
-            // This is a placeholder for mapping trading symbol to WebSocket numerical token (instrument_token for Kite).
-            // In a real system, you'd fetch this mapping from Kite's instrument list or have it configured.
-            String numericalTokenStr; // Kite's instrument token, usually numerical, as a String
-            if (instrumentSymbol.equalsIgnoreCase("NIFTYBANK")) {
-                numericalTokenStr = "260105"; // Nifty Bank Index
-            } else if (instrumentSymbol.equalsIgnoreCase("RELIANCE")) {
-                numericalTokenStr = "738561"; // Reliance Industries
-            } else {
-                LoggingUtil.warning("No hardcoded numerical (WebSocket) token for instrument symbol: " + instrumentSymbol + ". Skipping strategy setup for it.");
-                continue;
-            }
-
-            // Fetch Previous Day Close (PDC) for gap analysis
-            double pdc = 100.0; // Mock PDC
-
-            // TODO: Load strategy-specific parameters from config (e.g., ORB range, times, quantity)
-            // For simplicity, using hardcoded defaults here.
-            int orbOpeningRangeMinutes = 15; // As per requirement
-            LocalTime marketOpenTime = LocalTime.of(9, 15);
-            LocalTime strategyEndTime = LocalTime.of(15, 00); // When to stop initiating new ORB trades
-
-            ORBStrategy strategy = new ORBStrategy(
-                    timeSeriesManager,
-                    orderManager,
-                    riskManager,
-                    instrumentSymbol,      // The trading symbol (e.g., "NIFTYBANK") used for orders
-                    numericalTokenStr,     // The numerical instrument token (as String) used for data fetching & WebSocket
-                    pdc,                   // Previous Day's Close
-                    orbOpeningRangeMinutes,
-                    marketOpenTime,
-                    strategyEndTime
-            );
-            strategies.add(strategy);
-            LoggingUtil.info("ORB Strategy for " + instrumentSymbol + " (PDC: " + pdc + ", WebSocket Token: " + numericalTokenStr + ") initialized.");
-        }
-
-        // 4. Setup Callbacks for WebSocket and Start Connection
-        setupKiteServiceCallbacks();
-
-        // 5. Main Application Loop & Shutdown Handling
-        riskManagerThread = new RiskManagerThread(riskManager);
-        riskManagerThread.start();
-        LoggingUtil.info("System is running. Waiting for market data and events...");
-        LoggingUtil.info("Type 'exit' and press Enter in the console to shutdown gracefully.");
-
-
-        // Start a separate thread to listen for console input for shutdown
-        Thread consoleListenerThread = new Thread(() -> {
-            Scanner consoleScannerForExit = new Scanner(System.in);
-            while (isRunning) {
-                if (consoleScannerForExit.hasNextLine()) {
-                    String input = consoleScannerForExit.nextLine();
-                    if ("exit".equalsIgnoreCase(input.trim())) {
-                        LoggingUtil.info("'exit' command received.");
-                        shutdown();
-                        break;
-                    }
-                }
-            }
-            consoleScannerForExit.close();
-        });
-        consoleListenerThread.setName("ConsoleShutdownListener");
-        consoleListenerThread.start();
-
-        // Register a shutdown hook for graceful termination on Ctrl+C or OS signal
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LoggingUtil.info("JVM Shutdown hook activated.");
-            shutdown();
-        }));
-
-        // Keep the main thread alive while isRunning is true
-        while (isRunning) {
-            try {
-                Thread.sleep(1000); // Keep main thread alive
-            } catch (InterruptedException e) {
-                LoggingUtil.info("Main application thread interrupted.");
-                Thread.currentThread().interrupt();
-                shutdown();
-            }
-        }
-        LoggingUtil.info("Exiting main method.");
-        scanner.close(); // Close the initial scanner if it's still open and not System.in itself.
-    }
-
-    private static void setupKiteServiceCallbacks() {
-        // Mock implementation for testing
-    }
-
-    // Removed mapNumericalTokenToSymbol as strategy now holds numerical token.
-
-    private static synchronized void shutdown() {
-        if (!isRunning) {
+        if (args.length != 1 || !"--demo".equals(args[0])) {
+            System.out.println("Kite Algo Trader - offline foundation\nUsage: java -jar kite-algo-trader.jar --demo");
+            System.out.println("Live execution and historical performance backtesting are not enabled.");
+            if (args.length > 0 && !"--help".equals(args[0])) System.exit(2);
             return;
         }
-        LoggingUtil.info("Initiating shutdown sequence...");
-        isRunning = false;
-
-        if (riskManagerThread != null) {
-            riskManagerThread.stopThread();
+        Config config = new Config();
+        double capital = Double.parseDouble(config.getProperty("risk.capital", "100000"));
+        double tradeRisk = Double.parseDouble(config.getProperty("risk.perTrade", "250"));
+        double dailyLoss = Double.parseDouble(config.getProperty("risk.dailyLoss", "1000"));
+        double maximumNotional = Double.parseDouble(config.getProperty("risk.maximumNotional", "25000"));
+        double buffer = Double.parseDouble(config.getProperty("strategy.breakoutBuffer", "0.05"));
+        double reward = Double.parseDouble(config.getProperty("strategy.rewardMultiple", "1.5"));
+        if (!Double.isFinite(reward) || reward <= 0) throw new IllegalArgumentException("Invalid reward multiple");
+        TradingSession session = new TradingSession();
+        Instrument instrument = new Instrument("DEMO-1", "NSE", "DEMO_EQUITY", true);
+        InstrumentRegistry registry = new InstrumentRegistry(); registry.register(instrument);
+        TimeSeriesManager data = new TimeSeriesManager(session);
+        OrderManager orders = new OrderManager(registry);
+        RiskManager risk = new RiskManager(orders, capital, dailyLoss);
+        ORBStrategy strategy = new ORBStrategy(instrument, session, 15, LocalTime.of(10, 0), buffer, false);
+        ZonedDateTime start = ZonedDateTime.of(2026, 9, 7, 9, 15, 0, 0, TradingSession.ZONE);
+        System.out.println("SYNTHETIC DEMO ONLY - no network, credentials, or real orders; P&L excludes fees.");
+        for (int minute = 0; minute < 15; minute++) {
+            Candle bar = new Candle(start.plusMinutes(minute), instrument.token, 100, 101, 99, 100, 1000);
+            data.addClosedCandle(bar);
+            strategy.onClosedCandle(bar, bar.getTimestamp().plusMinutes(1));
         }
-
-        LoggingUtil.info("System shutdown actions complete. Exiting.");
+        System.out.println("Opening range: " + data.getFifteenMinSeries(instrument.token).getLast());
+        Candle breakout = new Candle(start.plusMinutes(15), instrument.token, 100, 102, 100, 102, 2000);
+        data.addClosedCandle(breakout);
+        ORBStrategy.Signal signal = strategy.onClosedCandle(breakout, start.plusMinutes(16)).orElseThrow();
+        // A separately specified next observation supplies the fill: never the signal bar itself.
+        double fill = 102.10;
+        int qty = PositionSizer.quantity(fill, signal.stopPrice, tradeRisk, capital, maximumNotional, 1000, 0);
+        if (qty == 0) { System.out.println("Sizing rejected this synthetic trade."); return; }
+        String entryId = orders.placeOrder(Map.of("exchange", instrument.exchange, "tradingsymbol", instrument.symbol,
+                "transaction_type", signal.side, "quantity", qty, "product", "MIS", "order_type", "LIMIT", "price", fill), "regular");
+        orders.updateOrderStatus(entryId, "COMPLETE", qty, fill);
+        double target = fill + reward * (fill - signal.stopPrice);
+        risk.setStopLoss(instrument.token, signal.stopPrice);
+        risk.setTakeProfit(instrument.token, target);
+        System.out.printf(Locale.ROOT, "09:31 simulated BUY %d at %.2f; stop %.2f; target %.2f%n", qty, fill, signal.stopPrice, target);
+        risk.checkPositions(instrument.token, target);
+        OrderManager.OrderDetails exit = orders.getAllActiveOrders().get(0);
+        orders.updateOrderStatus(exit.orderId, "COMPLETE", qty, target);
+        risk.checkPositions(instrument.token, target);
+        risk.checkDrawdown();
+        System.out.printf(Locale.ROOT, "Simulated exit confirmed; gross P&L %.2f; open positions %d%n",
+                orders.getTotalPnl(), orders.getAllOpenPositions().size());
+        System.out.println("This fixture verifies the plumbing; it provides no evidence of a trading edge.");
     }
 }

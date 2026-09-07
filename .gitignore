@@ -1,0 +1,5 @@
+/build/
+/target/
+*.log
+.env
+config.local.properties

@@ -63,7 +63,8 @@
     </dependencies>
 
     <build>
-        <sourceDirectory>src</sourceDirectory> <!-- Adjusted to current project structure -->
+        <sourceDirectory>src/com</sourceDirectory>
+        <testSourceDirectory>test</testSourceDirectory>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

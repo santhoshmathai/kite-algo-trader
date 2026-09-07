@@ -26,3 +26,7 @@ No multi-month real-data research, walk-forward study or profitability claim is 
 2. Download real data, preserve the input hashes and timestamped watchlist, and run separate development/holdout evaluations with stressed costs.
 3. Observe full paper sessions and verify report quantities, generated bars and exit decisions.
 4. Validate the live order lifecycle with the account's supported capabilities and a deliberately small allocation before broader use.
+
+## Paper-month setup extension
+
+The paper reporting extension passes 79 checks (46 foundation, 33 application). Added checks cover the INR 500000 profile and disabled live gate, order exports and reconciled period totals, missing/incomplete sessions, mixed-profile/live report exclusion, and prevention of paper modifications filling against older queued ticks. Packaged --help exposes paper-summary. No credentialed market-data session was run; daily authentication is still required locally.

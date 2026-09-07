@@ -25,7 +25,7 @@ public final class TradingSystemMain {
         if(command.equals("--demo")){require(args,1);FoundationDemo.main(args);return;}
         if(command.equals("login-url")){require(args,1);System.out.println(KiteBroker.loginUrl());return;}
         if(command.equals("status")){require(args,2);System.out.print(Files.readString(Path.of(args[1]).resolve("status.txt")));return;}
-        if(command.equals("stop")){require(args,2);Path account=Path.of(args[1]);if(!Files.exists(account.resolve("account.lock")))throw new IllegalArgumentException("Not a session account directory");Files.writeString(account.resolve("STOP"),"Operator stop requested\n");System.out.println("Stop requested. Wait for confirmed flat status and verify Kite positions.");return;}
+        if(command.equals("stop")){require(args,2);Path account=Path.of(args[1]);if(!Files.exists(account.resolve("account.lock")))throw new IllegalArgumentException("Not a session account directory");Files.writeString(account.resolve("STOP"),"Operator stop requested\n");System.out.println("Stop requested. Check the selected session status until FINISHED and flat=true.");return;}
         if(args.length<2)throw new IllegalArgumentException("Configuration path required");
         Settings cfg=new Settings(Path.of(args[1]));
         switch(command){
@@ -34,6 +34,7 @@ public final class TradingSystemMain {
             case "validate":require(args,2);Map<String,Equity> a=Equity.read(cfg.path("instruments"),cfg.symbols);new SessionCalendar(cfg.path("calendar"));new Fees(cfg.path("fees"));System.out.println("Configuration and "+a.size()+" equity mappings valid. Live enabled: "+cfg.liveEnabled);break;
             case "backtest":require(args,4);System.out.println("Report: "+Backtest.run(cfg,Path.of(args[2]),Path.of(args[3])));break;
             case "paper":require(args,2);TradingRuntime.run(cfg,false,false);break;
+            case "paper-summary":require(args,5);System.out.println("Summary: "+PaperSummary.run(cfg,args[2],LocalDate.parse(args[3]),LocalDate.parse(args[4])));break;
             case "live":require(args,3);if(!args[2].equals("--arm-live"))throw new IllegalArgumentException("Explicit live arm required");TradingRuntime.run(cfg,true,true);break;
             case "download":require(args,5);download(cfg,LocalDate.parse(args[2]),LocalDate.parse(args[3]),Path.of(args[4]));break;
             default:throw new IllegalArgumentException("Unknown command");
@@ -55,5 +56,6 @@ public final class TradingSystemMain {
         +"  download <config> <from YYYY-MM-DD> <to YYYY-MM-DD> <new bars.csv>\n"
         +"  backtest <config> <bars.csv> <output directory>\n  paper <config>\n  live <config> --arm-live\n"
         +"  status <day output directory>\n  stop <account output directory>\n"
+        +"  paper-summary <config> <account> <from YYYY-MM-DD> <to YYYY-MM-DD>\n"
         +"Live is disabled by default. See docs/OPERATIONS.md for login, static IP, recovery and data requirements.");}
 }

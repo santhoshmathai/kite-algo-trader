@@ -93,6 +93,39 @@ public final class ApplicationChecks {
             Settings cfg=settings("symbols","AAA,BBB","instruments",listings.toAbsolutePath().toString().replace('\\','/'),"maxPositions","1");
             try(Rig r=new Rig(cfg,null)){for(int m=0;m<16;m++){Instant t=OPEN.plusSeconds((m+1)*60);r.sim.time(t.toEpochMilli());r.engine.poll(t);for(String id:r.assets.keySet()){Candle c=new Candle(OPEN.plusSeconds(m*60).atZone(SessionCalendar.ZONE),id,100,m==15?102:101,m==15?100:99,m==15?102:100,10000);r.engine.mark(id,c.getClose(),c.getClose(),c.getClose(),t);r.engine.closed(c,t);}}yes(r.engine.trades().size()==1);}
         });
+        check("paper modification cannot fill against an older queued tick",()->{
+            SimBroker sim=new SimBroker(500000,0,.01);sim.time(OPEN.toEpochMilli());
+            String id=sim.submit(new Broker.Request("NSE:DEMO","SELL","SL-M",1,0,99,"Q1"));
+            sim.time(OPEN.plusSeconds(20).toEpochMilli());sim.modify(id,new Broker.Request("NSE:DEMO","SELL","MARKET",1,0,99,"Q1"));
+            sim.tick("NSE:DEMO",OPEN.plusSeconds(10),100,1000);yes(sim.snapshot().orders.get(0).filled==0);
+            sim.tick("NSE:DEMO",OPEN.plusSeconds(21),100,1000);yes(sim.snapshot().orders.get(0).filled==1);
+        });
+        check("paper reports expose entry and exit orders and reconcile weekly totals",()->{
+            Settings seed=settings();Settings cfg=settings("state",seed.base.toAbsolutePath().toString().replace('\\','/'));
+            try(Rig r=new Rig(cfg,null)){r.signal();r.open(16,102,10000);r.sim.range(candle(16,102,108,98,107,10000));r.engine.poll(OPEN.plusSeconds(16*60));
+                r.engine.flatten("Morning time exit");r.engine.poll(OPEN.plusSeconds(16*60));
+                Path day=cfg.path("state").resolve("paper/TEST/"+DAY);Reports.write(day,r.engine,"PAPER","test-context");
+                yes(Files.readAllLines(day.resolve("orders.csv")).size()==3);
+                Path summary=PaperSummary.run(cfg,"TEST",DAY,DAY);String report=Files.readString(summary.resolve("summary.txt"));
+                yes(report.contains("Included finished sessions: 1")&&report.contains("Net P&L of included sessions: INR "+r.engine.netPnl()));
+                yes(Files.readString(summary.resolve("days.csv")).contains(",FINISHED,1,"));
+            }
+        });
+        check("paper summary preserves missing and unfinished dates",()->{
+            Settings seed=settings();Settings cfg=settings("state",seed.base.toAbsolutePath().toString().replace('\\','/'));
+            try(Rig r=new Rig(cfg,null)){r.signal();Reports.write(cfg.path("state").resolve("paper/TEST/"+DAY),r.engine,"PAPER","test-context");
+                Path summary=PaperSummary.run(cfg,"TEST",DAY,DAY.plusDays(1));String days=Files.readString(summary.resolve("days.csv"));
+                yes(days.contains(",INCOMPLETE,")&&(days.contains(",FUTURE,")||days.contains(",MISSING,")));
+                yes(Files.readString(summary.resolve("summary.txt")).contains("Profit/loss is unavailable"));}
+        });
+        check("paper summary excludes mismatched profiles and live reports",()->{
+            Settings seed=settings();Settings cfg=settings("state",seed.base.toAbsolutePath().toString().replace('\\','/'));
+            try(Rig r=new Rig(cfg,null)){r.engine.flatten("Morning time exit");r.engine.poll(OPEN);Path day=cfg.path("state").resolve("paper/TEST/"+DAY);
+                Reports.write(day,r.engine,"LIVE","test-context");yes(Files.readString(PaperSummary.run(cfg,"TEST",DAY,DAY).resolve("days.csv")).contains(",INVALID,"));
+                Reports.write(day,r.engine,"PAPER","test-context");Properties p=new Properties();Path meta=day.resolve("session.properties");try(Reader reader=Files.newBufferedReader(meta)){p.load(reader);}p.setProperty("configFingerprint","different");try(Writer writer=Files.newBufferedWriter(meta)){p.store(writer,"test");}
+                yes(Files.readString(PaperSummary.run(cfg,"TEST",DAY,DAY).resolve("days.csv")).contains(",INVALID,"));}
+        });
+        check("five lakh profile keeps real execution disabled",()->{Settings cfg=new Settings(Path.of("config/paper-500k.properties"));equal(cfg.capital,500000);yes(!cfg.liveEnabled&&!cfg.shorts);fails(()->TradingRuntime.run(cfg,true,true));});
         System.out.println("Application checks passed: "+passed);
     }
 }

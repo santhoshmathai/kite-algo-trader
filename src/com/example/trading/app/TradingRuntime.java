@@ -31,7 +31,7 @@ public final class TradingRuntime {
                 try(Journal journal=new Journal(output.resolve("events.journal"))){
                     TradingEngine engine=new TradingEngine(cfg,date,assets,broker,journal,fees,hash);
                     AtomicBoolean shutdown=new AtomicBoolean();CountDownLatch stopped=new CountDownLatch(1);
-                    Thread hook=new Thread(()->{shutdown.set(true);try{if(!stopped.await(20,TimeUnit.SECONDS))System.err.println("Shutdown before confirmed flat: inspect Kite orders and positions now.");}catch(InterruptedException e){Thread.currentThread().interrupt();}},"shutdown-request");
+                    Thread hook=new Thread(()->{shutdown.set(true);try{if(!stopped.await(20,TimeUnit.SECONDS))System.err.println(live?"Shutdown before confirmed flat: inspect Kite orders and positions now.":"Paper shutdown before confirmed flat: retain this session as incomplete; no real orders were submitted.");}catch(InterruptedException e){Thread.currentThread().interrupt();}},"shutdown-request");
                     Runtime.getRuntime().addShutdownHook(hook);
                     try{
                         if(!Instant.now().isBefore(calendar.open(date)))engine.halt("Started after open: manage existing orders only; no entries today");
@@ -53,7 +53,7 @@ public final class TradingRuntime {
                             Instant now=Instant.now();
                             if(now.toEpochMilli()>=pollAt){
                                 try{if(broker instanceof SimBroker)((SimBroker)broker).time(now.toEpochMilli());engine.poll(now);}
-                                catch(Exception e){engine.halt("Broker reconciliation unavailable: "+e.getClass().getSimpleName());System.err.println("Reconciliation failed; entries halted. Check connection and Kite protective orders.");}
+                                catch(Exception e){engine.halt("Broker reconciliation unavailable: "+e.getClass().getSimpleName());System.err.println(live?"Reconciliation failed; entries halted. Check connection and Kite protective orders.":"Paper reconciliation failed; entries halted. Preserve the session journal for investigation.");}
                                 pollAt=System.currentTimeMillis()+2000;
                             }
                             if(!dataFailed){for(Candle bar:builder.closeThrough(Instant.now().minusSeconds(2))){if(broker instanceof SimBroker)((SimBroker)broker).time(Instant.now().toEpochMilli());engine.closed(bar,Instant.now());}}

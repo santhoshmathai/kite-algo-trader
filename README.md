@@ -40,3 +40,7 @@ The live adapter is compiled and available but has not been tested against this 
 | `core`, `data`, `order`, `risk` | Existing foundation components and regression-tested demonstration |
 
 The current runtime uses `TradingEngine` for account/execution coordination; the earlier `OrderManager` and `RiskManager` remain foundation code, not a second live execution path. Everything runs inside one JVM. No web server is exposed.
+
+## Paper experiment with INR 5 lakh
+
+Use [the month-long paper guide](docs/PAPER-MONTH-GUIDE.md) for the prepared profile, daily login/start/stop routine, order inspection, weekly summaries and this week's learning plan. The [AI roadmap](docs/AI-ROADMAP.md) separates proposed enhancements from today's rule-based execution.

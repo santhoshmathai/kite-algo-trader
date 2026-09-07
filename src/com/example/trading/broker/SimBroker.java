@@ -16,7 +16,7 @@ public final class SimBroker implements Broker {
     public void time(long epochMillis){time=epochMillis;}
     @Override public String submit(Request request){State s=new State();s.id="paper"+(++sequence);s.request=request;s.created=time;if(request.type.equals("SL-M"))s.status="TRIGGER PENDING";orders.put(s.id,s);return s.id;}
     @Override public void cancel(String id){State s=orders.get(id);if(s==null)throw new IllegalArgumentException("Unknown order");if(!terminal(s))s.status="CANCELLED";}
-    @Override public void modify(String id,Request request){State s=orders.get(id);if(s==null||terminal(s)||request.quantity<s.filled)throw new IllegalArgumentException("Cannot modify");s.request=request;s.status=request.type.equals("SL-M")?"TRIGGER PENDING":"OPEN";}
+    @Override public void modify(String id,Request request){State s=orders.get(id);if(s==null||terminal(s)||request.quantity<s.filled)throw new IllegalArgumentException("Cannot modify");s.request=request;s.created=time;s.status=request.type.equals("SL-M")?"TRIGGER PENDING":"OPEN";}
     private boolean terminal(State s){return Set.of("COMPLETE","CANCELLED","REJECTED").contains(s.status);}
     public void bar(Candle c){open(c);range(c);}
     public void open(Candle c){process(c,false);}

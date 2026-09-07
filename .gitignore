@@ -1,0 +1,11 @@
+/build/
+/target/
+*.log
+.env
+config.local.properties
+
+/.deps/
+/runs/
+/data/
+/secrets/
+*.local.properties

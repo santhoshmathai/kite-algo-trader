@@ -10,7 +10,7 @@ public class TickData {
     private final ZonedDateTime timestamp;        // Timestamp of the tick
     private final String instrumentToken;     // Instrument token for the tick
     private final double lastTradedPrice;
-    private final long lastTradedVolume;      // Volume traded in this specific tick
+    private final long lastTradedVolume;      // Last-trade quantity; never sum snapshots for candle volume
     private final long totalVolume;           // Cumulative volume for the day up to this tick
     private final double averageTradePrice;   // Average trade price for the day
     private final MarketDepth marketDepth;    // Optional: Market depth snapshot at the time of this tick
@@ -36,7 +36,11 @@ public class TickData {
             throw new IllegalArgumentException("Instrument token cannot be null or empty.");
         }
 
-        this.timestamp = timestamp;
+        if (!Double.isFinite(lastTradedPrice) || lastTradedPrice <= 0 || lastTradedVolume < 0
+                || totalVolume < 0 || !Double.isFinite(averageTradePrice) || averageTradePrice < 0) {
+            throw new IllegalArgumentException("Invalid tick values");
+        }
+        this.timestamp = timestamp.withZoneSameInstant(TradingSession.ZONE);
         this.instrumentToken = instrumentToken;
         this.lastTradedPrice = lastTradedPrice;
         this.lastTradedVolume = lastTradedVolume;

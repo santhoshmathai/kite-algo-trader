@@ -1,182 +1,59 @@
 package com.example.trading;
 
-import com.example.trading.core.TickData;
-import com.example.trading.data.TimeSeriesManager;
-import com.example.trading.indicators.IndicatorCalculator;
-import com.example.trading.order.OrderManager;
-import com.example.trading.risk.RiskManager;
-import com.example.trading.risk.RiskManagerThread;
-import com.example.trading.strategy.ORBStrategy;
-import com.example.trading.util.Config; // Import Config
-import com.example.trading.util.LoggingUtil; // Import LoggingUtil
+import com.example.trading.app.*;
+import com.example.trading.broker.*;
+import com.example.trading.core.Candle;
+import com.example.trading.replay.Backtest;
+import java.nio.file.*;
+import java.time.*;
+import java.util.*;
 
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-import java.util.stream.Collectors;
-
-/**
- * Main class for the Intraday Trading System.
- * This class will initialize and coordinate all other components.
- */
-public class TradingSystemMain {
-
-    // Declare components
-    private static Config config; // Config instance
-    // private static LoggingUtil logger; // LoggingUtil methods are static
-    private static Object kiteService;
-    private static TimeSeriesManager timeSeriesManager;
-    private static IndicatorCalculator indicatorCalculator; // May not need an instance if all methods are static
-    private static OrderManager orderManager;
-    private static RiskManager riskManager;
-    private static RiskManagerThread riskManagerThread;
-    private static List<ORBStrategy> strategies; // Example: List of strategies
-    private static volatile boolean isRunning = true;
-
-
+/** Local command line application. Network access and execution are explicit commands. */
+public final class TradingSystemMain {
     public static void main(String[] args) {
-        // 1. Initialize Configuration and Logging
-        config = new Config(); // Loads from config.properties
-        LoggingUtil.setLevel(config.getLogLevel()); // Set log level from config
-        LoggingUtil.info("Intraday Trading System Starting...");
-        LoggingUtil.info("TradingSystemMain: Initializing components...");
-
-        // --- Load Core Credentials from Config ---
-        String apiKey = config.getApiKey();
-        String userId = config.getUserId();
-        String apiSecret = config.getApiSecret(); // Needed for generating session
-        String existingAccessToken = config.getAccessToken();
-
-        Scanner scanner = new Scanner(System.in); // For interactive input if credentials missing
-
-        if (apiKey == null || apiKey.trim().isEmpty() || apiKey.equals("YOUR_API_KEY_HERE")) {
-            LoggingUtil.warning("API Key not found in config.properties or is default.");
-            System.out.print("Enter Kite API Key: ");
-            apiKey = scanner.nextLine();
+        TimeZone.setDefault(TimeZone.getTimeZone(SessionCalendar.ZONE));
+        try { execute(args); }
+        catch(Exception e) {
+            // SDK transport errors may contain credential-bearing URLs: do not dump exception messages or stacks.
+            System.err.println("Command failed ("+e.getClass().getSimpleName()+"). Check command arguments, configuration, data and daily session. No automatic command retry.");
+            System.exit(2);
         }
-        if (userId == null || userId.trim().isEmpty() || userId.equals("YOUR_USER_ID_HERE")) {
-            LoggingUtil.warning("User ID not found in config.properties or is default.");
-            System.out.print("Enter Kite User ID: ");
-            userId = scanner.nextLine();
-        }
-
-        // 2. Initialize Core Services
-        kiteService = new Object(); // Mock KiteService
-
-        timeSeriesManager = new TimeSeriesManager();
-        orderManager = new OrderManager(kiteService);
-        riskManager = new RiskManager(orderManager);
-        indicatorCalculator = new IndicatorCalculator();
-
-        // 3. Initialize Strategies based on Config
-        strategies = new ArrayList<>();
-        List<String> instrumentSymbolsFromConfig = config.getStrategyInstruments();
-        LoggingUtil.info("Instruments from config: " + instrumentSymbolsFromConfig);
-
-        for (String instrumentSymbol : instrumentSymbolsFromConfig) {
-            // This is a placeholder for mapping trading symbol to WebSocket numerical token (instrument_token for Kite).
-            // In a real system, you'd fetch this mapping from Kite's instrument list or have it configured.
-            String numericalTokenStr; // Kite's instrument token, usually numerical, as a String
-            if (instrumentSymbol.equalsIgnoreCase("NIFTYBANK")) {
-                numericalTokenStr = "260105"; // Nifty Bank Index
-            } else if (instrumentSymbol.equalsIgnoreCase("RELIANCE")) {
-                numericalTokenStr = "738561"; // Reliance Industries
-            } else {
-                LoggingUtil.warning("No hardcoded numerical (WebSocket) token for instrument symbol: " + instrumentSymbol + ". Skipping strategy setup for it.");
-                continue;
-            }
-
-            // Fetch Previous Day Close (PDC) for gap analysis
-            double pdc = 100.0; // Mock PDC
-
-            // TODO: Load strategy-specific parameters from config (e.g., ORB range, times, quantity)
-            // For simplicity, using hardcoded defaults here.
-            int orbOpeningRangeMinutes = 15; // As per requirement
-            LocalTime marketOpenTime = LocalTime.of(9, 15);
-            LocalTime strategyEndTime = LocalTime.of(15, 00); // When to stop initiating new ORB trades
-
-            ORBStrategy strategy = new ORBStrategy(
-                    timeSeriesManager,
-                    orderManager,
-                    riskManager,
-                    instrumentSymbol,      // The trading symbol (e.g., "NIFTYBANK") used for orders
-                    numericalTokenStr,     // The numerical instrument token (as String) used for data fetching & WebSocket
-                    pdc,                   // Previous Day's Close
-                    orbOpeningRangeMinutes,
-                    marketOpenTime,
-                    strategyEndTime
-            );
-            strategies.add(strategy);
-            LoggingUtil.info("ORB Strategy for " + instrumentSymbol + " (PDC: " + pdc + ", WebSocket Token: " + numericalTokenStr + ") initialized.");
-        }
-
-        // 4. Setup Callbacks for WebSocket and Start Connection
-        setupKiteServiceCallbacks();
-
-        // 5. Main Application Loop & Shutdown Handling
-        riskManagerThread = new RiskManagerThread(riskManager);
-        riskManagerThread.start();
-        LoggingUtil.info("System is running. Waiting for market data and events...");
-        LoggingUtil.info("Type 'exit' and press Enter in the console to shutdown gracefully.");
-
-
-        // Start a separate thread to listen for console input for shutdown
-        Thread consoleListenerThread = new Thread(() -> {
-            Scanner consoleScannerForExit = new Scanner(System.in);
-            while (isRunning) {
-                if (consoleScannerForExit.hasNextLine()) {
-                    String input = consoleScannerForExit.nextLine();
-                    if ("exit".equalsIgnoreCase(input.trim())) {
-                        LoggingUtil.info("'exit' command received.");
-                        shutdown();
-                        break;
-                    }
-                }
-            }
-            consoleScannerForExit.close();
-        });
-        consoleListenerThread.setName("ConsoleShutdownListener");
-        consoleListenerThread.start();
-
-        // Register a shutdown hook for graceful termination on Ctrl+C or OS signal
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            LoggingUtil.info("JVM Shutdown hook activated.");
-            shutdown();
-        }));
-
-        // Keep the main thread alive while isRunning is true
-        while (isRunning) {
-            try {
-                Thread.sleep(1000); // Keep main thread alive
-            } catch (InterruptedException e) {
-                LoggingUtil.info("Main application thread interrupted.");
-                Thread.currentThread().interrupt();
-                shutdown();
-            }
-        }
-        LoggingUtil.info("Exiting main method.");
-        scanner.close(); // Close the initial scanner if it's still open and not System.in itself.
     }
-
-    private static void setupKiteServiceCallbacks() {
-        // Mock implementation for testing
-    }
-
-    // Removed mapNumericalTokenToSymbol as strategy now holds numerical token.
-
-    private static synchronized void shutdown() {
-        if (!isRunning) {
-            return;
+    public static void execute(String[] args)throws Exception {
+        if(args.length==0||args[0].equals("--help")){help();return;}
+        String command=args[0];
+        if(command.equals("--demo")){require(args,1);FoundationDemo.main(args);return;}
+        if(command.equals("login-url")){require(args,1);System.out.println(KiteBroker.loginUrl());return;}
+        if(command.equals("status")){require(args,2);System.out.print(Files.readString(Path.of(args[1]).resolve("status.txt")));return;}
+        if(command.equals("stop")){require(args,2);Path account=Path.of(args[1]);if(!Files.exists(account.resolve("account.lock")))throw new IllegalArgumentException("Not a session account directory");Files.writeString(account.resolve("STOP"),"Operator stop requested\n");System.out.println("Stop requested. Wait for confirmed flat status and verify Kite positions.");return;}
+        if(args.length<2)throw new IllegalArgumentException("Configuration path required");
+        Settings cfg=new Settings(Path.of(args[1]));
+        switch(command){
+            case "login":require(args,2);KiteBroker.login(cfg);break;
+            case "instruments":require(args,2);try(KiteBroker kite=new KiteBroker(cfg,Map.of(),false)){kite.downloadInstruments(cfg);}System.out.println("Instrument mappings saved.");break;
+            case "validate":require(args,2);Map<String,Equity> a=Equity.read(cfg.path("instruments"),cfg.symbols);new SessionCalendar(cfg.path("calendar"));new Fees(cfg.path("fees"));System.out.println("Configuration and "+a.size()+" equity mappings valid. Live enabled: "+cfg.liveEnabled);break;
+            case "backtest":require(args,4);System.out.println("Report: "+Backtest.run(cfg,Path.of(args[2]),Path.of(args[3])));break;
+            case "paper":require(args,2);TradingRuntime.run(cfg,false,false);break;
+            case "live":require(args,3);if(!args[2].equals("--arm-live"))throw new IllegalArgumentException("Explicit live arm required");TradingRuntime.run(cfg,true,true);break;
+            case "download":require(args,5);download(cfg,LocalDate.parse(args[2]),LocalDate.parse(args[3]),Path.of(args[4]));break;
+            default:throw new IllegalArgumentException("Unknown command");
         }
-        LoggingUtil.info("Initiating shutdown sequence...");
-        isRunning = false;
-
-        if (riskManagerThread != null) {
-            riskManagerThread.stopThread();
-        }
-
-        LoggingUtil.info("System shutdown actions complete. Exiting.");
     }
+    private static void download(Settings cfg,LocalDate from,LocalDate to,Path output)throws Exception{
+        if(to.isBefore(from)||to.isAfter(LocalDate.now(SessionCalendar.ZONE))||from.plusYears(5).isBefore(to))throw new IllegalArgumentException("Invalid date range");
+        Map<String,Equity> assets=Equity.read(cfg.path("instruments"),cfg.symbols);List<Candle> bars=new ArrayList<>();
+        try(KiteBroker kite=new KiteBroker(cfg,assets,false)){for(Equity e:assets.values())bars.addAll(kite.history(e,from,to));}
+        bars.sort(Comparator.comparing(Candle::getTimestamp).thenComparing(Candle::getInstrumentToken));
+        List<String> lines=new ArrayList<>();lines.add("timestamp,instrument,open,high,low,close,volume");
+        for(Candle c:bars)lines.add(c.getTimestamp().toOffsetDateTime()+","+c.getInstrumentToken()+","+c.getOpen()+","+c.getHigh()+","+c.getLow()+","+c.getClose()+","+c.getVolume());
+        Files.createDirectories(output.toAbsolutePath().getParent());Files.write(output,lines,StandardOpenOption.CREATE_NEW);System.out.println("Saved "+bars.size()+" bars. Validate calendar and historical fee coverage before replay.");
+    }
+    private static void require(String[] args,int n){if(args.length!=n)throw new IllegalArgumentException("Wrong argument count; see --help");}
+    private static void help(){System.out.println("Kite Algo Trader | India NSE equities | local standalone application\n"
+        +"java -jar build/kite-algo-trader.jar <command>\n"
+        +"  --demo | --help\n  validate <config>\n  login-url\n  login <config>\n  instruments <config>\n"
+        +"  download <config> <from YYYY-MM-DD> <to YYYY-MM-DD> <new bars.csv>\n"
+        +"  backtest <config> <bars.csv> <output directory>\n  paper <config>\n  live <config> --arm-live\n"
+        +"  status <day output directory>\n  stop <account output directory>\n"
+        +"Live is disabled by default. See docs/OPERATIONS.md for login, static IP, recovery and data requirements.");}
 }

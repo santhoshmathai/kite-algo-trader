@@ -1,223 +1,183 @@
 package com.example.trading.order;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import com.example.trading.core.*;
+import java.util.*;
 
-/**
- * Manages trading orders, including placement, modification, cancellation, and status tracking.
- * Interacts with KiteService to execute trades via the broker's API.
- */
-public class OrderManager {
+/** Offline order ledger. Submissions never contact a broker or imply a fill. All updates are cumulative. */
+public final class OrderManager {
+    private final InstrumentRegistry instruments;
+    private final Map<String, OrderDetails> orders = new LinkedHashMap<>();
+    private final Map<String, PositionDetails> positions = new LinkedHashMap<>();
+    private long sequence;
+    private boolean entriesEnabled = true;
 
-    private final Object kiteService; // Using Object to avoid dependency
-    // Stores active/pending orders. Key: Order ID, Value: OrderDetails (a new class to hold order info)
-    private final ConcurrentHashMap<String, OrderDetails> activeOrders;
-    // Stores filled/completed orders or positions. Key: Instrument Token, Value: PositionDetails
-    private final ConcurrentHashMap<String, PositionDetails> openPositions;
-
-
-    /**
-     * Represents details of an order.
-     */
-    public static class OrderDetails {
-        public final String orderId;
-        public final String instrumentToken; // Or tradingSymbol, depending on what's used more
-        public final String transactionType; // "BUY" or "SELL"
+    public static final class OrderDetails {
+        public final String orderId, instrumentToken, tradingSymbol, exchange, transactionType, orderType, productType, tag;
         public final int quantity;
-        public final double price; // Entry price for limit orders, or fill price
-        public String status; // e.g., "PENDING", "OPEN", "FILLED", "CANCELLED", "REJECTED"
-        public final String orderType; // "LIMIT", "MARKET", etc.
-        public final String productType; // "MIS", "CNC", etc.
-        public final String tag; // Optional tag for strategy or tracking
-
-        public OrderDetails(String orderId, String instrumentToken, String transactionType, int quantity, double price, String orderType, String productType, String tag) {
-            this.orderId = orderId;
-            this.instrumentToken = instrumentToken;
-            this.transactionType = transactionType;
-            this.quantity = quantity;
-            this.price = price;
-            this.orderType = orderType;
-            this.productType = productType;
-            this.status = "PENDING"; // Initial status
-            this.tag = tag;
+        public final double price;
+        public String status = "OPEN";
+        public int filledQuantity;
+        public double averageFillPrice;
+        private OrderDetails(String id, Instrument instrument, String side, int qty, double price, String type, String tag) {
+            orderId = id; instrumentToken = instrument.token; tradingSymbol = instrument.symbol;
+            exchange = instrument.exchange; transactionType = side; quantity = qty;
+            this.price = price; orderType = type; productType = "MIS"; this.tag = tag;
         }
-
-        @Override
-        public String toString() {
-            return "OrderDetails{" +
-                   "orderId='" + orderId + '\'' +
-                   ", instrumentToken='" + instrumentToken + '\'' +
-                   ", transactionType='" + transactionType + '\'' +
-                   ", quantity=" + quantity +
-                   ", price=" + price +
-                   ", status='" + status + '\'' +
-                   ", orderType='" + orderType + '\'' +
-                   ", productType='" + productType + '\'' +
-                   ", tag='" + tag + '\'' +
-                   '}';
+        private OrderDetails(OrderDetails o) {
+            this(o.orderId, new Instrument(o.instrumentToken, o.exchange, o.tradingSymbol, true),
+                    o.transactionType, o.quantity, o.price, o.orderType, o.tag);
+            status = o.status; filledQuantity = o.filledQuantity; averageFillPrice = o.averageFillPrice;
         }
+        public boolean isTerminal() { return Set.of("COMPLETE", "CANCELLED", "REJECTED").contains(status); }
     }
-
-    /**
-     * Represents details of an open position.
-     */
-    public static class PositionDetails {
+    public static final class PositionDetails {
         public final String instrumentToken;
-        public int netQuantity; // Positive for long, negative for short
-        public double averageBuyPrice;
-        public double averageSellPrice; // For short positions or if tracking sells separately
-        public double realizedPnl;
-        public double unrealizedPnl; // Needs market data to update
-
-        public PositionDetails(String instrumentToken) {
-            this.instrumentToken = instrumentToken;
-            this.netQuantity = 0;
-            this.averageBuyPrice = 0;
-            this.averageSellPrice = 0;
-            this.realizedPnl = 0;
-            this.unrealizedPnl = 0;
+        public int netQuantity;
+        public double averageBuyPrice, averageSellPrice, realizedPnl, unrealizedPnl;
+        private double lastPrice;
+        private PositionDetails(String token) { instrumentToken = token; }
+        private PositionDetails(PositionDetails p) {
+            instrumentToken = p.instrumentToken; netQuantity = p.netQuantity;
+            averageBuyPrice = p.averageBuyPrice; averageSellPrice = p.averageSellPrice;
+            realizedPnl = p.realizedPnl; unrealizedPnl = p.unrealizedPnl; lastPrice = p.lastPrice;
         }
-        // Methods to update position based on fills, calculate P&L, etc.
-        // This can get complex.
+    }
+    public OrderManager(InstrumentRegistry instruments) { this.instruments = Objects.requireNonNull(instruments); }
+    public Instrument getInstrument(String token) { return instruments.byToken(token); }
+    public synchronized void haltEntries() { entriesEnabled = false; }
+    public synchronized boolean areEntriesEnabled() { return entriesEnabled; }
+
+    public synchronized String placeOrder(Map<String, Object> params, String variety) {
+        return submit(params, variety, false);
+    }
+    private String submit(Map<String, Object> params, String variety, boolean exit) {
+        if (!exit && !entriesEnabled) throw new IllegalStateException("Entries halted");
+        if (!exit && "exit".equals(params.get("tag"))) throw new IllegalArgumentException("Exit tag is reserved");
+        if (!"regular".equals(variety) || !"MIS".equals(params.get("product")))
+            throw new IllegalArgumentException("Foundation supports regular MIS orders only");
+        Instrument instrument = instruments.forOrder((String) params.get("exchange"), (String) params.get("tradingsymbol"));
+        if (params.containsKey("instrument_token") && !instrument.token.equals(params.get("instrument_token")))
+            throw new IllegalArgumentException("Order symbol/token mismatch");
+        String side = (String) params.get("transaction_type"), type = (String) params.get("order_type");
+        if (!("BUY".equals(side) || "SELL".equals(side)) || !("LIMIT".equals(type) || "MARKET".equals(type)))
+            throw new IllegalArgumentException("Unsupported side/type");
+        Object quantity = params.get("quantity");
+        if (!(quantity instanceof Integer) || (Integer) quantity <= 0)
+            throw new IllegalArgumentException("Positive integer quantity required");
+        Object rawPrice = params.getOrDefault("price", 0.0);
+        if (!(rawPrice instanceof Number)) throw new IllegalArgumentException("Numeric price required");
+        double price = ((Number) rawPrice).doubleValue();
+        if (!Double.isFinite(price) || price < 0 || ("LIMIT".equals(type) && price == 0))
+            throw new IllegalArgumentException("Invalid price");
+        String id = "sim-" + (++sequence);
+        orders.put(id, new OrderDetails(id, instrument, side, (Integer) quantity, price, type,
+                (String) params.getOrDefault("tag", "entry")));
+        return id;
+    }
+    /** One outstanding exit per instrument; cancel pending entries before sizing the close. */
+    public synchronized String requestExit(String token) {
+        for (OrderDetails o : orders.values())
+            if (!o.isTerminal() && o.instrumentToken.equals(token) && "exit".equals(o.tag)) return o.orderId;
+        for (OrderDetails o : orders.values())
+            if (!o.isTerminal() && o.instrumentToken.equals(token)) cancelOrder(o.orderId, "regular");
+        PositionDetails p = positions.get(token);
+        if (p == null || p.netQuantity == 0) return null;
+        Instrument i = instruments.byToken(token);
+        return submit(Map.of("exchange", i.exchange, "tradingsymbol", i.symbol,
+                "transaction_type", p.netQuantity > 0 ? "SELL" : "BUY", "quantity", Math.abs(p.netQuantity),
+                "product", "MIS", "order_type", "MARKET", "tag", "exit"), "regular", true);
+    }
+    public synchronized String modifyOrder(String id, Map<String, Object> params, String variety) {
+        throw new UnsupportedOperationException("Order modification is not implemented in offline foundation");
+    }
+    public synchronized String cancelOrder(String id, String variety) {
+        if (!"regular".equals(variety)) throw new IllegalArgumentException("Unsupported variety");
+        OrderDetails o = requireOrder(id);
+        if (!o.isTerminal()) o.status = "CANCELLED"; // Synchronous simulated cancellation only.
+        return id;
     }
 
-
-    public OrderManager(Object kiteService) {
-        this.kiteService = kiteService;
-        this.activeOrders = new ConcurrentHashMap<>();
-        this.openPositions = new ConcurrentHashMap<>();
-        System.out.println("OrderManager initialized.");
-    }
-
-    /**
-     * Places a new order.
-     *
-     * @param orderParams Map containing all necessary parameters for the KiteConnectAPI.placeOrder call.
-     *                    Example keys: "tradingsymbol", "exchange", "transaction_type", "quantity",
-     *                    "product", "order_type", "price" (if limit/sl), "trigger_price" (if sl/slm), "tag".
-     * @param variety     The order variety (e.g., "regular", "amo", "bo", "co").
-     * @return The order ID if successfully placed, otherwise null.
-     */
-    public String placeOrder(Map<String, Object> orderParams, String variety) {
-        // Mock implementation for testing
-        String orderId = "mock_order_" + System.currentTimeMillis();
-        String tradingSymbol = (String) orderParams.get("tradingsymbol");
-        String transactionType = (String) orderParams.get("transaction_type");
-        Integer quantity = (Integer) orderParams.get("quantity");
-        Double price = (Double) orderParams.getOrDefault("price", 0.0);
-        String orderType = (String) orderParams.get("order_type");
-        String productType = (String) orderParams.get("product");
-        String tag = (String) orderParams.getOrDefault("tag", "default_tag");
-        OrderDetails details = new OrderDetails(orderId, tradingSymbol, transactionType, quantity, price, orderType, productType, tag);
-        activeOrders.put(orderId, details);
-        System.out.println("OrderManager: Mock order placed successfully. Order ID: " + orderId + ", Details: " + details);
-        return orderId;
-    }
-
-    /**
-     * Modifies an existing pending order.
-     *
-     * @param orderId     The ID of the order to modify.
-     * @param newParams   Map containing parameters to change (e.g., quantity, price, trigger_price).
-     * @param variety     The order variety.
-     * @return The new order ID if modification is successful (some brokers return a new ID), or original/updated ID.
-     */
-    public String modifyOrder(String orderId, Map<String, Object> newParams, String variety) {
-        // Mock implementation for testing
-        System.out.println("OrderManager: Mock order modification successful for order ID: " + orderId);
-        return orderId;
-    }
-
-    /**
-     * Cancels an existing pending order.
-     *
-     * @param orderId The ID of the order to cancel.
-     * @param variety The order variety.
-     * @return The order ID if cancellation is successful, otherwise null.
-     */
-    public String cancelOrder(String orderId, String variety) {
-        // Mock implementation for testing
-        System.out.println("OrderManager: Mock order cancellation successful for order ID: " + orderId);
-        return orderId;
-    }
-
-    /**
-     * Updates the status of an order. This would typically be called by a callback
-     * from KiteService when an order update is received (e.g., via WebSocket or polling).
-     *
-     * @param orderId      The ID of the order.
-     * @param newStatus    The new status (e.g., "FILLED", "CANCELLED", "REJECTED").
-     * @param filledQuantity The quantity filled for this update.
-     * @param averagePrice The average price at which it was filled for this update.
-     */
-    public void updateOrderStatus(String orderId, String newStatus, int filledQuantity, double averagePrice) {
-        OrderDetails details = activeOrders.get(orderId);
-        if (details == null) {
-            System.err.println("OrderManager: Received update for unknown order ID: " + orderId);
-            return;
+    /** Broker-style cumulative quantity AND cumulative average price; deduplicates cumulative fills. */
+    public synchronized void updateOrderStatus(String id, String status, int cumulativeQty, double cumulativeAverage) {
+        OrderDetails o = requireOrder(id);
+        if (status == null) throw new IllegalArgumentException("Status required");
+        String normalized = status.toUpperCase(Locale.ROOT);
+        if ("FILLED".equals(normalized)) normalized = "COMPLETE";
+        if (!Set.of("OPEN", "PENDING", "TRIGGER PENDING", "COMPLETE", "CANCELLED", "REJECTED").contains(normalized))
+            throw new IllegalArgumentException("Unsupported status: " + status);
+        if (cumulativeQty < 0 || cumulativeQty > o.quantity)
+            throw new IllegalArgumentException("Invalid cumulative fill quantity");
+        if (cumulativeQty < o.filledQuantity) return; // Delayed older snapshot.
+        if ("COMPLETE".equals(normalized) && cumulativeQty != o.quantity)
+            throw new IllegalArgumentException("Complete order must be fully filled");
+        if (cumulativeQty > 0 && (!Double.isFinite(cumulativeAverage) || cumulativeAverage <= 0))
+            throw new IllegalArgumentException("Invalid cumulative fill price");
+        int delta = cumulativeQty - o.filledQuantity;
+        if (delta == 0 && cumulativeQty > 0 && Math.abs(cumulativeAverage - o.averageFillPrice) > 1e-8)
+            throw new IllegalArgumentException("Fill-price correction requires reconciliation");
+        if (delta > 0) {
+            double incrementalPrice = (cumulativeQty * cumulativeAverage - o.filledQuantity * o.averageFillPrice) / delta;
+            if (!Double.isFinite(incrementalPrice) || incrementalPrice <= 0)
+                throw new IllegalArgumentException("Invalid incremental fill value");
+            updatePosition(o, delta, incrementalPrice);
+            o.filledQuantity = cumulativeQty; o.averageFillPrice = cumulativeAverage;
         }
-
-        System.out.println("OrderManager: Updating status for order " + orderId + " to " + newStatus +
-                           ", Filled Qty: " + filledQuantity + ", Avg Price: " + averagePrice);
-        details.status = newStatus;
-
-        if ("FILLED".equalsIgnoreCase(newStatus) || "COMPLETE".equalsIgnoreCase(newStatus) /* Kite uses COMPLETE for fully filled */) {
-            // TODO: Update position
-            updatePosition(details, filledQuantity, averagePrice);
-            activeOrders.remove(orderId); // Or move to a separate list of completed orders
-            System.out.println("OrderManager: Order " + orderId + " is FILLED. Position updated.");
-        } else if ("CANCELLED".equalsIgnoreCase(newStatus) || "REJECTED".equalsIgnoreCase(newStatus)) {
-            activeOrders.remove(orderId); // Or move to a history
-            System.out.println("OrderManager: Order " + orderId + " is " + newStatus + ". Removed from active orders.");
+        // Never reopen a terminal order on a delayed OPEN notification.
+        if (!o.isTerminal() || "COMPLETE".equals(normalized)) o.status = normalized;
+    }
+    private void updatePosition(OrderDetails o, int qty, double price) {
+        PositionDetails p = positions.computeIfAbsent(o.instrumentToken, PositionDetails::new);
+        int signedQty = "BUY".equals(o.transactionType) ? qty : -qty;
+        int before = p.netQuantity;
+        int after = Math.addExact(before, signedQty);
+        if (after == Integer.MIN_VALUE) throw new IllegalArgumentException("Position exceeds supported quantity");
+        double average = before >= 0 ? p.averageBuyPrice : p.averageSellPrice;
+        if (before == 0 || Integer.signum(before) == Integer.signum(signedQty)) {
+            average = (Math.abs((double) before) * average + qty * price) / Math.abs((double) after);
+        } else {
+            int closed = Math.min(Math.abs(before), qty);
+            p.realizedPnl += closed * (price - average) * Integer.signum(before);
+            if (after == 0) average = 0;
+            else if (Integer.signum(after) != Integer.signum(before)) average = price;
         }
-        // Other statuses like "OPEN" (for pending limit orders), "TRIGGER PENDING" etc. might just update the status.
+        p.netQuantity = after;
+        p.averageBuyPrice = after > 0 ? average : 0;
+        p.averageSellPrice = after < 0 ? average : 0;
+        if (p.lastPrice == 0) p.lastPrice = price;
+        revalue(p);
     }
-
-    /**
-     * Updates the position based on a filled order.
-     */
-    private void updatePosition(OrderDetails filledOrder, int filledQuantity, double fillPrice) {
-        PositionDetails position = openPositions.computeIfAbsent(filledOrder.instrumentToken, PositionDetails::new);
-
-        // This is a simplified position update logic. Real logic can be more complex with partial fills, etc.
-        if ("BUY".equalsIgnoreCase(filledOrder.transactionType)) {
-            double oldTotalValue = position.averageBuyPrice * position.netQuantity;
-            if (position.netQuantity < 0) { // Closing a short position
-                position.realizedPnl += (position.averageSellPrice - fillPrice) * Math.min(Math.abs(position.netQuantity), filledQuantity);
-            }
-            position.averageBuyPrice = (oldTotalValue + (double)filledQuantity * fillPrice) / (Math.abs(position.netQuantity) + filledQuantity); // This needs refinement for avg price calc
-            position.netQuantity += filledQuantity;
-        } else if ("SELL".equalsIgnoreCase(filledOrder.transactionType)) {
-            // Similar logic for sell: update averageSellPrice, netQuantity, realizedPnl if closing a long.
-            if (position.netQuantity > 0) { // Closing a long position
-                position.realizedPnl += (fillPrice - position.averageBuyPrice) * Math.min(position.netQuantity, filledQuantity);
-            }
-            // This averaging logic needs to be robust for short selling and averaging down/up.
-            position.netQuantity -= filledQuantity;
-        }
-        System.out.println("OrderManager: Position for " + filledOrder.instrumentToken + " updated. Net Qty: " + position.netQuantity);
+    public synchronized void markPrice(String token, double price) {
+        instruments.byToken(token);
+        if (!Double.isFinite(price) || price <= 0) throw new IllegalArgumentException("Invalid mark");
+        PositionDetails p = positions.get(token);
+        if (p != null) { p.lastPrice = price; revalue(p); }
     }
-
-
-    public OrderDetails getOrderDetails(String orderId) {
-        return activeOrders.get(orderId);
+    private void revalue(PositionDetails p) {
+        double average = p.netQuantity > 0 ? p.averageBuyPrice : p.averageSellPrice;
+        p.unrealizedPnl = p.netQuantity * (p.lastPrice - average);
     }
-
-    public List<OrderDetails> getAllActiveOrders() {
-        return new ArrayList<>(activeOrders.values());
+    private OrderDetails requireOrder(String id) {
+        OrderDetails o = orders.get(id);
+        if (o == null) throw new IllegalArgumentException("Unknown order: " + id);
+        return o;
     }
-
-    public PositionDetails getPosition(String instrumentToken) {
-        return openPositions.get(instrumentToken);
+    public synchronized OrderDetails getOrderDetails(String id) { return new OrderDetails(requireOrder(id)); }
+    public synchronized List<OrderDetails> getAllActiveOrders() {
+        List<OrderDetails> result = new ArrayList<>();
+        for (OrderDetails o : orders.values()) if (!o.isTerminal()) result.add(new OrderDetails(o));
+        return result;
     }
-
-    public Map<String, PositionDetails> getAllOpenPositions() {
-        return Collections.unmodifiableMap(openPositions);
+    public synchronized PositionDetails getPosition(String token) {
+        PositionDetails p = positions.get(token);
+        return p == null ? null : new PositionDetails(p);
     }
-
-    // TODO: Methods to get P&L, manage margin, etc.
-    // TODO: Handling of order update callbacks from KiteService (e.g., if KiteService uses WebSocket for order updates).
+    public synchronized Map<String, PositionDetails> getAllOpenPositions() {
+        Map<String, PositionDetails> result = new LinkedHashMap<>();
+        for (PositionDetails p : positions.values()) if (p.netQuantity != 0) result.put(p.instrumentToken, new PositionDetails(p));
+        return Collections.unmodifiableMap(result);
+    }
+    /** Includes realized profit from positions already closed; excludes costs in this foundation. */
+    public synchronized double getTotalPnl() {
+        return positions.values().stream().mapToDouble(p -> p.realizedPnl + p.unrealizedPnl).sum();
+    }
 }

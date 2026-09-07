@@ -1,126 +1,55 @@
 package com.example.trading.risk;
 
 import com.example.trading.order.OrderManager;
-import com.example.trading.util.LoggingUtil;
+import java.util.*;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-public class RiskManager {
-
-    private final OrderManager orderManager;
-    private final Map<String, Double> stopLosses = new ConcurrentHashMap<>();
-    private final Map<String, Double> takeProfits = new ConcurrentHashMap<>();
-    private double maxDrawdown = 0.1; // 10% max drawdown
-    private double peakPortfolioValue = -1;
-    private double currentDrawdown = 0;
-    private boolean inRiskMitigationMode = false;
-
-    public RiskManager(OrderManager orderManager) {
-        this.orderManager = orderManager;
+/** Offline risk checks. Exit intent remains active until fill confirmation; no broker-side protection yet. */
+public final class RiskManager {
+    private final OrderManager orders;
+    private final double startingCapital, maximumLoss;
+    private final Map<String, Double> stops = new HashMap<>(), targets = new HashMap<>();
+    private final Set<String> exitRequested = new HashSet<>();
+    private boolean halted;
+    public RiskManager(OrderManager orders, double startingCapital, double maximumLoss) {
+        if (orders == null || !Double.isFinite(startingCapital) || startingCapital <= 0
+                || !Double.isFinite(maximumLoss) || maximumLoss <= 0 || maximumLoss >= startingCapital)
+            throw new IllegalArgumentException("Invalid risk budget");
+        this.orders = orders; this.startingCapital = startingCapital; this.maximumLoss = maximumLoss;
     }
-
-    public void setStopLoss(String instrumentToken, double stopLoss) {
-        stopLosses.put(instrumentToken, stopLoss);
-        LoggingUtil.info("Stop-loss for " + instrumentToken + " set to " + stopLoss);
+    public synchronized void setStopLoss(String token, double price) { validate(token, price); stops.put(token, price); }
+    public synchronized void setTakeProfit(String token, double price) { validate(token, price); targets.put(token, price); }
+    private void validate(String token, double price) {
+        orders.getInstrument(token);
+        if (!Double.isFinite(price) || price <= 0) throw new IllegalArgumentException("Invalid risk price");
     }
-
-    public void setTakeProfit(String instrumentToken, double takeProfit) {
-        takeProfits.put(instrumentToken, takeProfit);
-        LoggingUtil.info("Take-profit for " + instrumentToken + " set to " + takeProfit);
-    }
-
-    public void checkPositions(String instrumentToken, double lastTradedPrice) {
-        if (inRiskMitigationMode) {
+    public synchronized void checkPositions(String token, double lastPrice) {
+        validate(token, lastPrice);
+        orders.markPrice(token, lastPrice);
+        OrderManager.PositionDetails p = orders.getPosition(token);
+        if (p == null || p.netQuantity == 0) {
+            // Preserve entry protection while an entry order is still awaiting fills.
+            boolean pending = orders.getAllActiveOrders().stream().anyMatch(o -> o.instrumentToken.equals(token));
+            if (!pending) { stops.remove(token); targets.remove(token); exitRequested.remove(token); }
             return;
         }
-
-        OrderManager.PositionDetails position = orderManager.getPosition(instrumentToken);
-        if (position == null) {
-            return;
-        }
-
-        if (position.netQuantity > 0) { // Long position
-            if (stopLosses.containsKey(instrumentToken) && lastTradedPrice <= stopLosses.get(instrumentToken)) {
-                LoggingUtil.info("Stop-loss triggered for long position on " + instrumentToken + " at price " + lastTradedPrice);
-                // Place a market sell order to square off the position
-                orderManager.placeOrder(createSquareOffOrderParams("SELL", position.netQuantity, instrumentToken), "regular");
-                stopLosses.remove(instrumentToken); // Stop-loss executed, remove it
-            } else if (takeProfits.containsKey(instrumentToken) && lastTradedPrice >= takeProfits.get(instrumentToken)) {
-                LoggingUtil.info("Take-profit triggered for long position on " + instrumentToken + " at price " + lastTradedPrice);
-                // Place a market sell order to square off the position
-                orderManager.placeOrder(createSquareOffOrderParams("SELL", position.netQuantity, instrumentToken), "regular");
-                takeProfits.remove(instrumentToken); // Take-profit executed, remove it
-            }
-        } else if (position.netQuantity < 0) { // Short position
-            if (stopLosses.containsKey(instrumentToken) && lastTradedPrice >= stopLosses.get(instrumentToken)) {
-                LoggingUtil.info("Stop-loss triggered for short position on " + instrumentToken + " at price " + lastTradedPrice);
-                // Place a market buy order to square off the position
-                orderManager.placeOrder(createSquareOffOrderParams("BUY", -position.netQuantity, instrumentToken), "regular");
-                stopLosses.remove(instrumentToken); // Stop-loss executed, remove it
-            } else if (takeProfits.containsKey(instrumentToken) && lastTradedPrice <= takeProfits.get(instrumentToken)) {
-                LoggingUtil.info("Take-profit triggered for short position on " + instrumentToken + " at price " + lastTradedPrice);
-                // Place a market buy order to square off the position
-                orderManager.placeOrder(createSquareOffOrderParams("BUY", -position.netQuantity, instrumentToken), "regular");
-                takeProfits.remove(instrumentToken); // Take-profit executed, remove it
-            }
-        }
+        Double stop = stops.get(token), target = targets.get(token);
+        boolean stopHit = stop != null && (p.netQuantity > 0 ? lastPrice <= stop : lastPrice >= stop);
+        boolean targetHit = target != null && (p.netQuantity > 0 ? lastPrice >= target : lastPrice <= target);
+        if (halted || stopHit || targetHit) exitRequested.add(token);
+        if (exitRequested.contains(token)) orders.requestExit(token);
     }
-
-    private Map<String, Object> createSquareOffOrderParams(String transactionType, int quantity, String instrumentToken) {
-        Map<String, Object> params = new java.util.HashMap<>();
-        params.put("tradingsymbol", instrumentToken);
-        params.put("exchange", "NSE"); // Make configurable if needed
-        params.put("transaction_type", transactionType);
-        params.put("quantity", quantity);
-        params.put("product", "MIS"); // Make configurable if needed
-        params.put("order_type", "MARKET");
-        params.put("tag", "RiskManager_SquareOff");
-        return params;
+    /** Loss from the supplied session capital, including marked P&L of open AND closed positions. */
+    public synchronized void checkDrawdown() {
+        if (orders.getTotalPnl() <= -maximumLoss) halted = true;
+        if (halted) flattenAll(); // Retry remaining exposure after rejected/partial exits.
     }
-
-    public void checkDrawdown() {
-        double currentPortfolioValue = calculateCurrentPortfolioValue();
-        if (peakPortfolioValue < 0) {
-            peakPortfolioValue = currentPortfolioValue;
-        } else {
-            peakPortfolioValue = Math.max(peakPortfolioValue, currentPortfolioValue);
-        }
-
-        currentDrawdown = (peakPortfolioValue - currentPortfolioValue) / peakPortfolioValue;
-        if (currentDrawdown > maxDrawdown) {
-            inRiskMitigationMode = true;
-            LoggingUtil.warning("Maximum drawdown exceeded. Entering risk mitigation mode.");
-            mitigateRisk();
-        }
+    public synchronized void flattenAll() {
+        halted = true;
+        orders.haltEntries();
+        for (OrderManager.OrderDetails o : orders.getAllActiveOrders())
+            if (!"exit".equals(o.tag)) orders.cancelOrder(o.orderId, "regular");
+        for (String token : orders.getAllOpenPositions().keySet()) orders.requestExit(token);
     }
-
-    private void mitigateRisk() {
-        LoggingUtil.info("Mitigating risk...");
-
-        // Cancel all open orders
-        for (OrderManager.OrderDetails order : orderManager.getAllActiveOrders()) {
-            orderManager.cancelOrder(order.orderId, "regular");
-        }
-
-        // Square off all open positions
-        for (OrderManager.PositionDetails position : orderManager.getAllOpenPositions().values()) {
-            if (position.netQuantity > 0) {
-                orderManager.placeOrder(createSquareOffOrderParams("SELL", position.netQuantity, position.instrumentToken), "regular");
-            } else if (position.netQuantity < 0) {
-                orderManager.placeOrder(createSquareOffOrderParams("BUY", -position.netQuantity, position.instrumentToken), "regular");
-            }
-        }
-    }
-
-    private double calculateCurrentPortfolioValue() {
-        // This is a simplified calculation. A real implementation would need to fetch account balance and positions value.
-        double positionsValue = 0;
-        for (OrderManager.PositionDetails position : orderManager.getAllOpenPositions().values()) {
-            // This requires getting the last traded price for each position's instrument
-            // For simplicity, we'll just use the net quantity and average price for now
-            positionsValue += position.netQuantity * position.averageBuyPrice; // This is not accurate, needs LTP
-        }
-        return 100000 + positionsValue; // Assuming a starting capital of 100000
-    }
+    public synchronized boolean isHalted() { return halted; }
+    public synchronized double getEquity() { return startingCapital + orders.getTotalPnl(); }
 }

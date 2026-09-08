@@ -44,3 +44,7 @@ The current runtime uses `TradingEngine` for account/execution coordination; the
 ## Paper experiment with INR 5 lakh
 
 Use [the month-long paper guide](docs/PAPER-MONTH-GUIDE.md) for the prepared profile, daily login/start/stop routine, order inspection, weekly summaries and this week's learning plan. The [AI roadmap](docs/AI-ROADMAP.md) separates proposed enhancements from today's rule-based execution.
+
+## IBKR US integration foundation
+
+The same repository now has an optional [IBKR integration foundation and staged plan](docs/IBKR-INTEGRATION.md): US session-aware ORB, calendar and a read-only TWS/Gateway diagnostic. Build it separately with build-ibkr.ps1. Automated IBKR paper orders are not implemented yet; the existing Kite commands remain available.

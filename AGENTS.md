@@ -58,3 +58,7 @@ intraday-trading-system-zerodha/
 *   Strategies should be self-contained and use services like `TimeSeriesManager` for data and `OrderManager` for execution.
 
 By following these guidelines, we aim to build a robust and maintainable trading system.Now, I will proceed to create the basic directory structure and empty Java files as placeholders. I'll start with the main application class and then the package structure.
+
+## IBKR integration (user-authorized, 2026-09-08)
+
+The repository also targets IBKR US equities. Keep Kite integration using the official Kite SDK. The explicitly requested IBKR integration may use the official TWS Java SDK and its bundled runtime dependencies, stored locally outside tracked source. Do not redistribute IBKR SDK files in this public repository. The optional integration lives under integrations/ibkr and has its own build; the default India build must remain usable without it. Preserve existing India defaults and run India regressions for shared changes. See docs/IBKR-INTEGRATION.md for milestone scope and the supported IBKR Java runtime. Other new libraries still require authorization.

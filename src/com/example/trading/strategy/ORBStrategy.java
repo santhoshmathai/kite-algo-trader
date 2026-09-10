@@ -31,8 +31,8 @@ public final class ORBStrategy {
     public ORBStrategy(Instrument instrument, TradingSession session, int rangeMinutes,
                        LocalTime entryCutoff, double buffer, boolean allowShorts) {
         if (instrument == null || !instrument.tradable || session == null || rangeMinutes < 1 || rangeMinutes > 60
-                || entryCutoff == null || !entryCutoff.isAfter(TradingSession.OPEN.plusMinutes(rangeMinutes + 1))
-                || entryCutoff.isAfter(TradingSession.CLOSE) || !Double.isFinite(buffer) || buffer < 0)
+                || entryCutoff == null || !entryCutoff.isAfter(session.open().plusMinutes(rangeMinutes + 1))
+                || entryCutoff.isAfter(session.close()) || !Double.isFinite(buffer) || buffer < 0)
             throw new IllegalArgumentException("Invalid ORB parameters");
         this.instrument = instrument; this.session = session; this.rangeMinutes = rangeMinutes;
         this.entryCutoff = entryCutoff; this.buffer = buffer; this.allowShorts = allowShorts;
@@ -40,8 +40,8 @@ public final class ORBStrategy {
 
     /** availableAt must be the actual replay/live observation time, never earlier than candle close. */
     public Optional<Signal> onClosedCandle(Candle candle, ZonedDateTime availableAt) {
-        ZonedDateTime start = candle.getTimestamp();
-        ZonedDateTime now = availableAt.withZoneSameInstant(TradingSession.ZONE);
+        ZonedDateTime start = candle.getTimestamp().withZoneSameInstant(session.zone());
+        ZonedDateTime now = availableAt.withZoneSameInstant(session.zone());
         if (!instrument.token.equals(candle.getInstrumentToken()) || !session.contains(start)
                 || start.getSecond() != 0 || start.getNano() != 0 || now.isBefore(start.plusMinutes(1)))
             throw new IllegalArgumentException("Invalid or unfinished signal candle");
@@ -53,9 +53,9 @@ public final class ORBStrategy {
             rangeHigh = 0; rangeLow = Double.MAX_VALUE;
         }
         lastProcessed = start;
-        LocalTime endOfRange = TradingSession.OPEN.plusMinutes(rangeMinutes);
+        LocalTime endOfRange = session.open().plusMinutes(rangeMinutes);
         if (start.toLocalTime().isBefore(endOfRange)) {
-            if (!start.toLocalTime().equals(TradingSession.OPEN.plusMinutes(openingBars))) rangeValid = false;
+            if (!start.toLocalTime().equals(session.open().plusMinutes(openingBars))) rangeValid = false;
             openingBars++;
             rangeHigh = Math.max(rangeHigh, candle.getHigh());
             rangeLow = Math.min(rangeLow, candle.getLow());

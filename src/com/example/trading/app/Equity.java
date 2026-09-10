@@ -14,14 +14,18 @@ public final class Equity {
     public final BigDecimal tick;
     public final LocalDate asOf;
     public Equity(String symbol, long token, double tick, String sector, LocalDate asOf) {
+        this("NSE",symbol,token,tick,sector,asOf);
+    }
+    public Equity(String exchange,String symbol, long token, double tick, String sector, LocalDate asOf) {
         if (!symbol.matches("[A-Z0-9&_.-]+") || token <= 0 || !Double.isFinite(tick) || tick <= 0) throw new IllegalArgumentException("Invalid equity");
-        this.symbol=symbol; id="NSE:"+symbol; this.token=token; this.tick=BigDecimal.valueOf(tick); this.sector=sector; this.asOf=asOf;
+        if(!exchange.matches("[A-Z]+"))throw new IllegalArgumentException("Invalid exchange");
+        this.symbol=symbol; id=exchange+":"+symbol; this.token=token; this.tick=BigDecimal.valueOf(tick); this.sector=sector; this.asOf=asOf;
     }
     public double price(double value, boolean up) {
         if (!Double.isFinite(value) || value <= 0) throw new IllegalArgumentException("Invalid price");
         return BigDecimal.valueOf(value).divide(tick,0,up?RoundingMode.CEILING:RoundingMode.FLOOR).multiply(tick).doubleValue();
     }
-    public Instrument strategyInstrument() { return new Instrument(id,"NSE",symbol,true); }
+    public Instrument strategyInstrument() { return new Instrument(id,id.split(":")[0],symbol,true); }
     public static Map<String,Equity> read(Path path, Set<String> symbols) throws IOException {
         List<String[]> rows=Csv.read(path, "symbol,token,tick_size,sector,as_of"); Map<String,Equity> result=new TreeMap<>();
         for(String[] r: rows) {

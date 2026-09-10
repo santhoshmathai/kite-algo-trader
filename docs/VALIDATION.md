@@ -30,3 +30,16 @@ No multi-month real-data research, walk-forward study or profitability claim is 
 ## Paper-month setup extension
 
 The paper reporting extension passes 79 checks (46 foundation, 33 application). Added checks cover the INR 500000 profile and disabled live gate, order exports and reconciled period totals, missing/incomplete sessions, mixed-profile/live report exclusion, and prevention of paper modifications filling against older queued ticks. Packaged --help exposes paper-summary. No credentialed market-data session was run; daily authentication is still required locally.
+
+## IBKR paper execution extension — 2026-09-11
+
+Executed on installed JDK 26.0.2.1 with official API 10.45 and bundled protobuf:
+
+- `build.ps1 test`: 79 India checks passed (46 foundation + 33 application).
+- `build-ibkr.ps1 test`: 33 IBKR checks passed (14 foundation + 19 paper execution).
+- `run-ibkr.ps1 demo -Output runs/ibkr-demo-20260911`: packaged offline buy, protective stop, target cancellation/replacement and sell finished with confirmed flatness. Artificial scenario estimated net $22; this is fixture output, not actual trading profit.
+- `run-ibkr.ps1 schedule -SessionDate 2026-09-11`: open 14:30 London, close 21:00 London; morning flatten begins 15:30 London.
+
+New assertions cover SDK order translation/account gates, callbacks before order metadata, duplicate executions and commission association, foreign-account/client isolation, complete-minute aggregation, USD sizing, partial entry protection, cancellation-confirmation gating, full/partial stop fills racing cancellation, uncertain submission without duplicate entry, rejected protection without retries and US time exits.
+
+No broker connection or broker-hosted paper order has been tested yet. The user reports that the paper account is enabled. No listener was present on 7497/4002 at the latest local check. Account identity, USD settled-cash callback availability, data subscriptions, real TWS acknowledgements/commissions and recovery must be verified under supervision. Offline fake brokers do not validate broker-specific behavior or profitability. The configured USD cost allowance is not an actual fee schedule.

@@ -36,5 +36,7 @@ public interface Broker extends AutoCloseable {
     void cancel(String orderId)throws Exception;
     void modify(String orderId,Request replacement)throws Exception;
     Snapshot snapshot()throws Exception;
+    /** Some venues require cancel confirmation before changing a protective stop into a market exit. */
+    default boolean cancelBeforeExitTypeChange(){return false;}
     @Override default void close()throws Exception{ }
 }

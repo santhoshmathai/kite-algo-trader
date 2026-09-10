@@ -31,7 +31,8 @@ public final class TradingEngine {
     private final Map<String,Equity> assets;
     private final Broker broker;
     private final Journal journal;
-    private final Fees fees;
+    private final TradeCosts fees;
+    private final TradingSession session;
     private final Map<String,ORBStrategy> strategies=new TreeMap<>();
     private final Map<String,Mark> marks=new HashMap<>();
     private final Map<String,Tracked> orders=new LinkedHashMap<>();
@@ -45,9 +46,12 @@ public final class TradingEngine {
     private final String contextHash;
 
     public TradingEngine(Settings config,LocalDate date,Map<String,Equity> assets,Broker broker,Journal journal,Fees fees,String contextHash)throws IOException{
-        this.config=config;this.date=date;this.assets=Map.copyOf(assets);this.broker=broker;this.journal=journal;this.fees=fees;this.contextHash=contextHash;
-        now=date.atStartOfDay(SessionCalendar.ZONE).toInstant();brokerCash=config.capital;
-        for(Equity e:assets.values())strategies.put(e.id,new ORBStrategy(e.strategyInstrument(),new TradingSession(),15,config.cutoff,e.tick.doubleValue()*config.bufferTicks,config.shorts));
+        this(config,date,assets,broker,journal,fees,contextHash,new TradingSession());
+    }
+    public TradingEngine(Settings config,LocalDate date,Map<String,Equity> assets,Broker broker,Journal journal,TradeCosts fees,String contextHash,TradingSession session)throws IOException{
+        this.session=session;this.config=config;this.date=date;this.assets=Map.copyOf(assets);this.broker=broker;this.journal=journal;this.fees=fees;this.contextHash=contextHash;
+        now=date.atStartOfDay(session.zone()).toInstant();brokerCash=config.capital;
+        for(Equity e:assets.values())strategies.put(e.id,new ORBStrategy(e.strategyInstrument(),session,15,config.cutoff,e.tick.doubleValue()*config.bufferTicks,config.shorts));
         Properties previous=journal.latest();
         if(previous.containsKey("date")){
             if(!date.toString().equals(previous.getProperty("date")))throw new IOException("Journal belongs to another session. Archive only after broker flatness is verified.");
@@ -62,10 +66,10 @@ public final class TradingEngine {
     public void closed(Candle candle,Instant observed)throws Exception{
         time(observed);String key=candle.getInstrumentToken();ORBStrategy strategy=strategies.get(key);if(strategy==null)return;
         if(Duration.between(candle.getTimestamp().toInstant().plusSeconds(60),observed).toMillis()>config.maxSignalDelaySeconds*1000L)return;
-        Optional<ORBStrategy.Signal> signal=strategy.onClosedCandle(candle,observed.atZone(SessionCalendar.ZONE));
+        Optional<ORBStrategy.Signal> signal=strategy.onClosedCandle(candle,observed.atZone(session.zone()));
         if(signal.isEmpty()||attempted.contains(key))return;
         attempted.add(key);save();
-        if(halted||forceExit||!now.atZone(SessionCalendar.ZONE).toLocalTime().isBefore(config.cutoff)||trades.size()>=config.maxTrades){note("SKIP "+key+" entry limits");return;}
+        if(halted||forceExit||!now.atZone(session.zone()).toLocalTime().isBefore(config.cutoff)||trades.size()>=config.maxTrades){note("SKIP "+key+" entry limits");return;}
         long active=trades.values().stream().filter(this::active).count();if(active>=config.maxPositions){note("SKIP "+key+" position cap");return;}
         Mark mark=marks.get(key);if(mark==null||Duration.between(mark.at,now).getSeconds()>config.staleSeconds||mark.at.isAfter(now)) {note("SKIP "+key+" stale quote");return;}
         if(!Double.isFinite(mark.bid)||!Double.isFinite(mark.ask)||mark.bid<=0||mark.ask<mark.bid||(mark.ask-mark.bid)/mark.price*10000>config.maxSpreadBps){note("SKIP "+key+" spread unavailable/wide");return;}
@@ -73,7 +77,7 @@ public final class TradingEngine {
         double limit=e.price(signal.get().referencePrice*(1+(buy?1:-1)*config.slippageBps/10000),buy);
         double stop=e.price(signal.get().stopPrice,!buy),distance=buy?limit-stop:stop-limit;
         if(distance/limit<config.minStopFraction||distance/limit>config.maxStopFraction){note("SKIP "+key+" stop distance");return;}
-        double costs=fees.estimate(date,buy?"BUY":"SELL",limit)+fees.estimate(date,buy?"SELL":"BUY",stop);
+        double costs=fees.estimate(date,buy?"BUY":"SELL",1,limit)+fees.estimate(date,buy?"SELL":"BUY",1,stop);
         double lossPerShare=distance+costs+stop*config.slippageBps/10000;
         double cash=Math.max(0,Math.min(brokerCash,config.capital+netPnl())-reservedNotional());
         double riskBudget=Math.max(0,Math.min(config.tradeRisk,config.maxOpenRisk-reservedRisk()));
@@ -87,14 +91,14 @@ public final class TradingEngine {
     private void time(Instant at){if(at.isBefore(now))throw new IllegalArgumentException("Engine clock moved backwards");now=at;}
     public void poll(Instant at)throws Exception{
         time(at);reconciled=false;
-        if(!date.equals(now.atZone(SessionCalendar.ZONE).toLocalDate())) {halt("Session date changed; operator recovery required");return;}
+        if(!date.equals(now.atZone(session.zone()).toLocalDate())) {halt("Session date changed; operator recovery required");return;}
         Broker.Snapshot snapshot=broker.snapshot();
         if(!Double.isFinite(snapshot.availableCash)||snapshot.availableCash<0){halt("Invalid broker cash");return;}brokerCash=snapshot.availableCash;
         Map<String,Broker.Order> byTag=new HashMap<>();
         for(Broker.Order o:snapshot.orders){
             if(orders.containsKey(o.tag)){
                 if(byTag.put(o.tag,o)!=null){halt("Duplicate broker tag: reconciliation required");return;}
-            }else if(!o.terminal()){halt("Unmanaged broker order; reconcile account in Kite");return;}
+            }else if(!o.terminal()){halt("Unmanaged broker order; reconcile account at the broker");return;}
         }
         boolean pendingUnknown=false;
         for(Map.Entry<String,Tracked> entry:orders.entrySet()){
@@ -117,7 +121,7 @@ public final class TradingEngine {
         if(!expected.equals(snapshot.positions)){halt("Broker/local positions differ; reconcile before further orders");return;}
         if(pendingUnknown){halted=true;reason="Uncertain broker request; polling for confirmation, no resubmission";save();return;}
         reconciled=true;
-        if(!now.atZone(SessionCalendar.ZONE).toLocalTime().isBefore(config.flatten)){forceExit=true;reason="Morning time exit";}
+        if(!now.atZone(session.zone()).toLocalTime().isBefore(config.flatten)){forceExit=true;reason="Morning time exit";}
         if(netPnl()<=-config.dailyLoss){forceExit=true;halted=true;reason="Daily loss limit";}
         for(Trade t:new ArrayList<>(trades.values()))manage(t);
         save();
@@ -125,7 +129,7 @@ public final class TradingEngine {
     private void manage(Trade t)throws Exception{
         Tracked entry=orders.get(t.entryTag);int remaining=remaining(t);Mark m=marks.get(t.instrument);
         if(!entry.terminal()&&(entry.filled>0||forceExit||Duration.between(t.created,now).getSeconds()>=config.entryTtlSeconds
-                ||!now.atZone(SessionCalendar.ZONE).toLocalTime().isBefore(config.cutoff)))cancel(entry);
+                ||!now.atZone(session.zone()).toLocalTime().isBefore(config.cutoff)))cancel(entry);
         if(remaining==0){for(String tag:t.exits){Tracked x=orders.get(tag);if(!x.terminal())cancel(x);
             if(t.reason.isEmpty()&&x.filled>0&&x.request.type.equals("SL-M"))t.reason="Broker stop fill";}return;}
         boolean stale=m==null||Duration.between(m.at,now).getSeconds()>config.staleSeconds;
@@ -138,14 +142,15 @@ public final class TradingEngine {
         for(String tag:t.exits){Tracked x=orders.get(tag);if(!x.terminal()){if(active!=null){halt("Multiple active exits");return;}active=x;}}
         String side=buy?"SELL":"BUY";
         if(active==null&&!t.exits.isEmpty()&&orders.get(t.exits.get(t.exits.size()-1)).status.equals("REJECTED")){
-            halt("Exit rejected: inspect and close position in Kite; automatic retries disabled");return;
+            halt("Exit rejected: inspect and close position at the broker; automatic retries disabled");return;
         }
         // Convert the same protective order to MARKET for a target/time exit; do not race a second close order.
         if(active==null){String tag=tag();t.exits.add(tag);String type=t.reason.isEmpty()?"SL-M":"MARKET";
             create(new Broker.Request(t.instrument,side,type,remaining,0,t.stop,tag));}
         else if(active.pending.isEmpty()){
             int required=active.filled+remaining;String type=t.reason.isEmpty()?active.request.type:"MARKET";
-            if(active.request.quantity!=required||!active.request.type.equals(type))modify(active,new Broker.Request(t.instrument,side,type,required,0,t.stop,active.request.tag));
+            if(!active.request.type.equals(type)&&broker.cancelBeforeExitTypeChange())cancel(active);
+            else if(active.request.quantity!=required||!active.request.type.equals(type))modify(active,new Broker.Request(t.instrument,side,type,required,0,t.stop,active.request.tag));
         }
     }
     private void create(Broker.Request r)throws Exception{
@@ -168,7 +173,7 @@ public final class TradingEngine {
     private boolean active(Trade t){return remaining(t)>0||!orders.get(t.entryTag).terminal();}
     public int remaining(Trade t){int q=orders.get(t.entryTag).filled;for(String tag:t.exits)q-=orders.get(tag).filled;return q;}
     private double reservedNotional(){double n=0;for(Trade t:trades.values()){Tracked e=orders.get(t.entryTag);int q=remaining(t)+(e.terminal()?0:e.request.quantity-e.filled);n+=q*e.request.price;}return n;}
-    private double reservedRisk(){double n=0;for(Trade t:trades.values()){Tracked e=orders.get(t.entryTag);int q=remaining(t)+(e.terminal()?0:e.request.quantity-e.filled);n+=q*(Math.abs(e.request.price-t.stop)+fees.estimate(date,t.side,e.request.price)+fees.estimate(date,opposite(t.side),t.stop)+t.stop*config.slippageBps/10000);}return n;}
+    private double reservedRisk(){double n=0;for(Trade t:trades.values()){Tracked e=orders.get(t.entryTag);int q=remaining(t)+(e.terminal()?0:e.request.quantity-e.filled);n+=q*(Math.abs(e.request.price-t.stop)+fees.estimate(date,t.side,1,e.request.price)+fees.estimate(date,opposite(t.side),1,t.stop)+t.stop*config.slippageBps/10000);}return n;}
     public double tradeGross(Trade t){
         Tracked entry=orders.get(t.entryTag);BigDecimal value=BigDecimal.ZERO;
         for(String tag:t.exits){Tracked x=orders.get(tag);value=value.add(BigDecimal.valueOf(x.average).subtract(BigDecimal.valueOf(entry.average)).multiply(BigDecimal.valueOf(x.filled)));}
@@ -176,8 +181,8 @@ public final class TradingEngine {
         value=value.add(BigDecimal.valueOf(mark).subtract(BigDecimal.valueOf(entry.average)).multiply(BigDecimal.valueOf(remaining(t))));
         return value.multiply(BigDecimal.valueOf(t.side.equals("BUY")?1:-1)).doubleValue();
     }
-    public double tradeCosts(Trade t){double cost=0;Tracked e=orders.get(t.entryTag);cost+=fees.estimate(date,e.request.side,e.filled*e.average);
-        for(String tag:t.exits){Tracked x=orders.get(tag);cost+=fees.estimate(date,x.request.side,x.filled*x.average);}return cost;}
+    public double tradeCosts(Trade t){double cost=0;Tracked e=orders.get(t.entryTag);cost+=fees.estimate(date,e.request.side,e.filled,e.average);
+        for(String tag:t.exits){Tracked x=orders.get(tag);cost+=fees.estimate(date,x.request.side,x.filled,x.average);}return cost;}
     public double netPnl(){double sum=0;for(Trade t:trades.values())sum+=tradeGross(t)-tradeCosts(t);return sum;}
     public boolean flat(){return reconciled&&trades.values().stream().allMatch(t->remaining(t)==0)&&orders.values().stream().allMatch(t->t.terminal()&&t.pending.isEmpty());}
     public boolean finished(){return forceExit&&flat();}

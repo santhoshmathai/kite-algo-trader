@@ -1,6 +1,6 @@
 # Kite Algo Trader
 
-A local Java application for **NSE cash-equity opening-range breakout trading with Kite Connect**. One process handles market data, sizing, execution, recovery and reports. It includes historical replay, live-data paper trading and explicitly armed live execution. It does not implement options or US trading yet.
+A local Java application for **NSE cash-equity opening-range breakout trading with Kite Connect**. One process handles market data, sizing, execution, recovery and reports. It includes historical replay, live-data paper trading and explicitly armed live execution. An optional IBKR adapter adds US equity paper trading; options and real-money IBKR trading are not implemented.
 
 ## Run offline first
 
@@ -44,3 +44,7 @@ The current runtime uses `TradingEngine` for account/execution coordination; the
 ## Paper experiment with INR 5 lakh
 
 Use [the month-long paper guide](docs/PAPER-MONTH-GUIDE.md) for the prepared profile, daily login/start/stop routine, order inspection, weekly summaries and this week's learning plan. The [AI roadmap](docs/AI-ROADMAP.md) separates proposed enhancements from today's rule-based execution.
+
+## IBKR US paper trading
+
+Use the [IBKR paper operating guide](docs/IBKR-PAPER-TRADING.md) for the offline demo, TWS/Gateway setup, automated paper buying/selling, stopping and USD reports. Build it separately with build-ibkr.ps1. The [integration architecture](docs/IBKR-INTEGRATION.md) explains the optional SDK and shared engine. Offline tests pass; account-specific connection and execution checks remain pending. The existing Kite commands remain available.

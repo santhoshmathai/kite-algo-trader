@@ -6,7 +6,8 @@ import java.time.*;
 import java.util.*;
 
 /** Dated resident-equity fee estimates per executed order; contract-note rounding may differ. */
-public final class Fees {
+public final class Fees implements TradeCosts {
+    public double estimate(LocalDate date,String side,int quantity,double price){return estimate(date,side,quantity*price);}
     private final List<String[]> rows;
     public Fees(Path file) throws IOException { rows=Csv.read(file,"from,to,brokerage_rate,brokerage_cap,stt_sell,exchange_rate,sebi_rate,stamp_buy,gst,ipft_rate");
         for(String[] r:rows) { if(r.length!=10||LocalDate.parse(r[0]).isAfter(LocalDate.parse(r[1]))) throw new IOException("Invalid fee interval");

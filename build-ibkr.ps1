@@ -32,6 +32,8 @@ try {
     if ($Action -eq 'test') {
         & (Join-Path $jdkRoot 'bin/java.exe') -cp $runtimeCp com.example.trading.ibkr.IbkrChecks
         if ($LASTEXITCODE -ne 0) { throw 'IBKR checks failed' }
+        & (Join-Path $jdkRoot 'bin/java.exe') -cp $runtimeCp com.example.trading.ibkr.IbkrPaperChecks
+        if ($LASTEXITCODE -ne 0) { throw 'IBKR paper checks failed' }
     }
     Write-Host "Built $artifact. Probe requires Java 21+; SDK files stay outside the distributable JAR."
 } finally { Pop-Location }
